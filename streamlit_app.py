@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import base64
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 import pandas as pd
@@ -1149,5 +1151,15 @@ def main() -> None:
     render_advanced_tab(advanced_tab)
 
 
+AUTORUN_ENV_VAR = "STREAMLIT_AUTORUN"
+
+
 if __name__ == "__main__":
-    main()
+    if os.environ.get("STREAMLIT_SERVER_SCRIPT_PATH") or os.environ.get(AUTORUN_ENV_VAR) == "1":
+        main()
+    else:
+        os.environ[AUTORUN_ENV_VAR] = "1"
+        from streamlit.web import bootstrap
+
+        script_path = Path(__file__).resolve()
+        bootstrap.run(str(script_path), "", [], flag_options={})

@@ -80,10 +80,14 @@ console or the Streamlit app.
 #### Option B: Streamlit console
 
 1. Ensure the backend is running (step 4).
-2. In a new terminal, launch Streamlit with the packaged dashboard:
+2. In a new terminal, launch Streamlit with the packaged dashboard. You can use
+   the standard CLI or run the script directly—both options start the same
+   server:
 
    ```bash
    streamlit run streamlit_app.py
+   # or
+   python streamlit_app.py
    ```
 
 3. Your browser will open to a multi-tab experience mirroring the static web
