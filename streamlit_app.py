@@ -113,6 +113,221 @@ SCHEDULE_OPTIONS = {
     "Cash Flow": ["Cash Flow Statement", "Valuation"],
 }
 
+DEFAULT_ASSUMPTION_YEARS = [2023, 2024, 2025, 2026, 2027]
+ASSUMPTION_SCHEDULES: List[Dict[str, Any]] = [
+    {
+        "name": "Demand & Conversion",
+        "description": "Traffic, conversion, and churn drivers for each forecast year.",
+        "columns": [
+            "Year",
+            "Email Traffic",
+            "Organic Search Traffic",
+            "Paid Search Traffic",
+            "Affiliates Traffic",
+            "Email Conversion Rate",
+            "Organic Search Conversion Rate",
+            "Paid Search Conversion Rate",
+            "Affiliates Conversion Rate",
+            "Churn Rate",
+        ],
+        "editable_year": True,
+    },
+    {
+        "name": "Pricing & Order Economics",
+        "description": "Average order value, markdowns, and unit economics assumptions.",
+        "columns": [
+            "Year",
+            "Average Item Value",
+            "Number of Items per Order",
+            "Average Markdown",
+            "Average Promotion/Discount",
+            "COGS Percentage",
+        ],
+        "editable_year": False,
+    },
+    {
+        "name": "Acquisition Costs",
+        "description": "Cost per click inputs for each acquisition channel.",
+        "columns": [
+            "Year",
+            "Email Cost per Click",
+            "Organic Search Cost per Click",
+            "Paid Search Cost per Click",
+            "Affiliates Cost per Click",
+        ],
+        "editable_year": False,
+    },
+    {
+        "name": "Fulfillment & Operating Costs",
+        "description": "Per-order fulfillment costs plus warehouse overhead and tax rate assumptions.",
+        "columns": [
+            "Year",
+            "Freight/Shipping per Order",
+            "Labor/Handling per Order",
+            "General Warehouse Rent",
+            "Other",
+            "Interest",
+            "Tax Rate",
+        ],
+        "editable_year": False,
+    },
+    {
+        "name": "Staffing Levels",
+        "description": "Direct, indirect, and part-time staffing assumptions and costs.",
+        "columns": [
+            "Year",
+            "Direct Staff Hours per Year",
+            "Direct Staff Number",
+            "Direct Staff Hourly Rate",
+            "Direct Staff Total Cost",
+            "Indirect Staff Hours per Year",
+            "Indirect Staff Number",
+            "Indirect Staff Hourly Rate",
+            "Indirect Staff Total Cost",
+            "Part-Time Staff Hours per Year",
+            "Part-Time Staff Number",
+            "Part-Time Staff Hourly Rate",
+            "Part-Time Staff Total Cost",
+        ],
+        "editable_year": False,
+    },
+    {
+        "name": "Executive Compensation",
+        "description": "Leadership salaries captured separately from staffing totals.",
+        "columns": [
+            "Year",
+            "CEO Salary",
+            "COO Salary",
+            "CFO Salary",
+            "Director of HR Salary",
+            "CIO Salary",
+        ],
+        "editable_year": False,
+    },
+    {
+        "name": "Employee Benefits",
+        "description": "Benefits allocations and employer-paid allowances.",
+        "columns": [
+            "Year",
+            "Pension Cost per Staff",
+            "Pension Total Cost",
+            "Medical Insurance Cost per Staff",
+            "Medical Insurance Total Cost",
+            "Child Benefit Cost per Staff",
+            "Child Benefit Total Cost",
+            "Car Benefit Cost per Staff",
+            "Car Benefit Total Cost",
+            "Total Benefits",
+        ],
+        "editable_year": False,
+    },
+    {
+        "name": "Overheads & Fees",
+        "description": "General overhead expenses and professional fees.",
+        "columns": [
+            "Year",
+            "Salaries, Wages & Benefits",
+            "Office Rent",
+            "Rent Categories",
+            "Professional Fees",
+            "Professional Fee Types",
+            "Depreciation",
+        ],
+        "editable_year": False,
+    },
+    {
+        "name": "Working Capital",
+        "description": "Receivable, inventory, and payable day assumptions.",
+        "columns": [
+            "Year",
+            "Accounts Receivable Days",
+            "Inventory Days",
+            "Accounts Payable Days",
+        ],
+        "editable_year": False,
+    },
+    {
+        "name": "Capital Investments",
+        "description": "Capital expenditure and depreciation schedules.",
+        "columns": [
+            "Year",
+            "Technology Development",
+            "Office Equipment",
+            "Technology Depreciation Years",
+            "Office Equipment Depreciation Years",
+        ],
+        "editable_year": False,
+    },
+    {
+        "name": "Financing Activities",
+        "description": "Equity, debt, and dividend financing assumptions.",
+        "columns": [
+            "Year",
+            "Interest Rate",
+            "Equity Raised",
+            "Dividends Paid",
+            "Debt Issued",
+        ],
+        "editable_year": False,
+    },
+    {
+        "name": "Property Portfolio",
+        "description": "Warehouse footprint and rent assumptions by site.",
+        "columns": [
+            "Year",
+            "Warehouse2 Square Meters",
+            "Warehouse2 Cost per SQM",
+            "Warehouse2",
+            "sun warehouse Square Meters",
+            "sun warehouse Cost per SQM",
+            "sun warehouse",
+            "new warehouse Square Meters",
+            "new warehouse Cost per SQM",
+            "new warehouse",
+        ],
+        "editable_year": False,
+    },
+    {
+        "name": "Legal & Compliance",
+        "description": "Legal obligations, recurring fees, and future legal spend planning.",
+        "columns": [
+            "Year",
+            "Legal Cost",
+            "Legal",
+            "legal_2024 Cost",
+            "legal_2024",
+            "legal_2025 Cost",
+            "legal_2025",
+        ],
+        "editable_year": False,
+    },
+    {
+        "name": "Asset Register",
+        "description": "Fixed asset balances and depreciation assumptions.",
+        "columns": [
+            "Year",
+            "Asset_1_Name",
+            "Asset_1_Amount",
+            "Asset_1_Rate",
+            "Asset_1_Depreciation",
+            "Asset_1_NBV",
+        ],
+        "editable_year": False,
+    },
+    {
+        "name": "Debt Schedule",
+        "description": "Outstanding debt facilities and repayment terms.",
+        "columns": [
+            "Year",
+            "Debt_1_Name",
+            "Debt_1_Amount",
+            "Debt_1_Interest_Rate",
+            "Debt_1_Duration",
+        ],
+        "editable_year": False,
+    },
+]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -136,6 +351,183 @@ def set_api_base(url: str) -> None:
     if cleaned:
         cleaned = cleaned.rstrip("/")
     st.session_state["api_base_url"] = cleaned or DEFAULT_API_BASE
+
+
+def _normalize_year_list(years: Iterable[Any]) -> List[int]:
+    normalized: List[int] = []
+    for item in years:
+        try:
+            value = int(float(item))
+        except (TypeError, ValueError):
+            continue
+        if value not in normalized:
+            normalized.append(value)
+    return sorted(normalized)
+
+
+def create_blank_schedule(columns: Iterable[str], years: Iterable[int]) -> pd.DataFrame:
+    year_list = _normalize_year_list(years)
+    if year_list:
+        frame = pd.DataFrame({"Year": year_list})
+    else:
+        frame = pd.DataFrame(columns=["Year"])
+    for column in columns:
+        if column == "Year":
+            continue
+        frame[column] = None
+    # Ensure column order matches the schedule definition
+    return frame[[col for col in columns if col in frame.columns]]
+
+
+def ensure_assumption_tables() -> None:
+    if "assumption_tables" not in st.session_state:
+        st.session_state["assumption_years"] = DEFAULT_ASSUMPTION_YEARS.copy()
+        st.session_state["assumption_tables"] = {
+            schedule["name"]: create_blank_schedule(
+                schedule["columns"], st.session_state["assumption_years"]
+            )
+            for schedule in ASSUMPTION_SCHEDULES
+        }
+
+
+def get_assumption_years() -> List[int]:
+    if years := st.session_state.get("assumption_years"):
+        return years
+    tables: Dict[str, pd.DataFrame] = st.session_state.get("assumption_tables", {})
+    collected: List[int] = []
+    for frame in tables.values():
+        if frame is None or frame.empty or "Year" not in frame.columns:
+            continue
+        collected.extend(_normalize_year_list(frame["Year"].tolist()))
+    if not collected:
+        collected = DEFAULT_ASSUMPTION_YEARS.copy()
+    st.session_state["assumption_years"] = collected
+    return collected
+
+
+def add_assumption_year(year: int) -> None:
+    updated_years = sorted({*get_assumption_years(), year})
+    st.session_state["assumption_years"] = updated_years
+    tables: Dict[str, pd.DataFrame] = st.session_state.get("assumption_tables", {})
+    st.session_state["assumption_tables"] = sync_schedule_years(updated_years, tables)
+
+
+def remove_assumption_year(year: int) -> None:
+    current_years = [value for value in get_assumption_years() if value != year]
+    st.session_state["assumption_years"] = current_years
+    tables: Dict[str, pd.DataFrame] = st.session_state.get("assumption_tables", {})
+    cleaned: Dict[str, pd.DataFrame] = {}
+    for schedule in ASSUMPTION_SCHEDULES:
+        frame = tables.get(schedule["name"])
+        if frame is None or frame.empty:
+            cleaned[schedule["name"]] = frame
+            continue
+        frame = frame.copy()
+        if "Year" in frame.columns:
+            frame["Year"] = pd.to_numeric(frame["Year"], errors="coerce")
+            frame = frame[frame["Year"] != year]
+        cleaned[schedule["name"]] = frame
+    st.session_state["assumption_tables"] = sync_schedule_years(current_years, cleaned)
+
+
+def reset_assumption_tables(years: Optional[Iterable[int]] = None) -> None:
+    base_years = _normalize_year_list(years or DEFAULT_ASSUMPTION_YEARS)
+    st.session_state["assumption_years"] = base_years
+    st.session_state["assumption_tables"] = {
+        schedule["name"]: create_blank_schedule(schedule["columns"], base_years)
+        for schedule in ASSUMPTION_SCHEDULES
+    }
+    st.session_state["assumptions_raw"] = []
+
+
+def split_assumptions_into_tables(df: pd.DataFrame, years: Iterable[int]) -> Dict[str, pd.DataFrame]:
+    year_list = _normalize_year_list(years)
+    tables: Dict[str, pd.DataFrame] = {}
+    for schedule in ASSUMPTION_SCHEDULES:
+        available_cols = [col for col in schedule["columns"] if col in df.columns]
+        if available_cols:
+            frame = df[available_cols].copy()
+            if "Year" in frame.columns:
+                frame["Year"] = pd.to_numeric(frame["Year"], errors="coerce")
+            for column in schedule["columns"]:
+                if column not in frame.columns:
+                    frame[column] = None
+            frame = frame[schedule["columns"]]
+        else:
+            frame = create_blank_schedule(schedule["columns"], year_list)
+        tables[schedule["name"]] = frame.reset_index(drop=True)
+    return tables
+
+
+def combine_assumption_tables(tables: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+    frames: List[pd.DataFrame] = []
+    for schedule in ASSUMPTION_SCHEDULES:
+        frame = tables.get(schedule["name"])
+        if frame is None or frame.empty or "Year" not in frame.columns:
+            continue
+        normalized = frame.copy()
+        normalized["Year"] = pd.to_numeric(normalized["Year"], errors="coerce")
+        frames.append(normalized)
+    if not frames:
+        return pd.DataFrame()
+    merged = frames[0]
+    for frame in frames[1:]:
+        merged = pd.merge(merged, frame, on="Year", how="outer")
+    merged = merged.sort_values("Year").reset_index(drop=True)
+    ordered_columns: List[str] = []
+    for schedule in ASSUMPTION_SCHEDULES:
+        for column in schedule["columns"]:
+            if column not in ordered_columns:
+                ordered_columns.append(column)
+    merged = merged[[column for column in ordered_columns if column in merged.columns]]
+    merged["Year"] = pd.to_numeric(merged["Year"], errors="coerce").astype("Int64")
+    return merged
+
+
+def set_assumptions_data(rows: List[Dict[str, Any]]) -> None:
+    df = to_dataframe(rows)
+    if not df.empty and "Year" in df.columns:
+        years = _normalize_year_list(df["Year"].tolist())
+    else:
+        years = DEFAULT_ASSUMPTION_YEARS.copy()
+    st.session_state["assumptions_raw"] = rows
+    st.session_state["assumption_years"] = years
+    st.session_state["assumption_tables"] = split_assumptions_into_tables(df, years)
+
+
+def sync_schedule_years(base_years: List[int], tables: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+    normalized_years = _normalize_year_list(base_years)
+    synced: Dict[str, pd.DataFrame] = {}
+    for schedule in ASSUMPTION_SCHEDULES:
+        frame = tables.get(schedule["name"])
+        if not normalized_years:
+            synced[schedule["name"]] = create_blank_schedule(schedule["columns"], [])
+            continue
+        if frame is None or frame.empty:
+            frame = create_blank_schedule(schedule["columns"], normalized_years)
+        else:
+            frame = frame.copy()
+            if "Year" not in frame.columns:
+                frame.insert(0, "Year", [None] * len(frame))
+            frame["Year"] = pd.to_numeric(frame["Year"], errors="coerce")
+            frame = frame[frame["Year"].isin(normalized_years) | frame["Year"].isna()]
+            existing_years = _normalize_year_list(frame["Year"].tolist())
+            missing_years = [year for year in normalized_years if year not in existing_years]
+            if missing_years:
+                new_rows = pd.DataFrame(
+                    [
+                        {**{column: None for column in schedule["columns"]}, "Year": year}
+                        for year in missing_years
+                    ]
+                )
+                frame = pd.concat([frame, new_rows], ignore_index=True)
+        for column in schedule["columns"]:
+            if column not in frame.columns:
+                frame[column] = None
+        frame = frame[schedule["columns"]]
+        frame = frame.sort_values("Year", na_position="last").reset_index(drop=True)
+        synced[schedule["name"]] = frame
+    return synced
 
 
 def api_request(
@@ -436,12 +828,14 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
             " and control base analysis inputs before running downstream workflows."
         )
 
+        ensure_assumption_tables()
+
         action_cols = st.columns(3)
         if action_cols[0].button("Load existing workbook", use_container_width=True):
             try:
                 with st.spinner("Loading existing workbook..."):
                     response = api_get("/file_action", params={"action": "Load Existing"})
-                st.session_state["assumptions_raw"] = response.get("data")
+                set_assumptions_data(response.get("data") or [])
                 st.session_state["file_status"] = response
                 st.success("Existing workbook loaded.")
             except RuntimeError as exc:
@@ -451,7 +845,7 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
             try:
                 with st.spinner("Starting new workbook..."):
                     response = api_get("/file_action", params={"action": "Start New"})
-                st.session_state["assumptions_raw"] = response.get("data")
+                set_assumptions_data(response.get("data") or [])
                 st.session_state["file_status"] = response
                 st.success("Blank workbook initialized.")
             except RuntimeError as exc:
@@ -470,9 +864,9 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                                 uploaded.getvalue(),
                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             )
-                        }
+                        } 
                         response = api_post("/upload_file", files=files)
-                    st.session_state["assumptions_raw"] = response.get("data")
+                    set_assumptions_data(response.get("data") or [])
                     st.session_state["file_status"] = response
                     st.success("Workbook uploaded and processed.")
                 except RuntimeError as exc:
@@ -485,24 +879,107 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                 f" | Exists: {status.get('exists', False)}"
             )
 
-        assumptions_df = to_dataframe(st.session_state.get("assumptions_raw"))
-        if assumptions_df.empty:
-            st.info("Load or upload a workbook to edit assumptions.")
-        else:
-            st.subheader("Edit assumptions")
-            edited_df = st.data_editor(
-                assumptions_df,
-                num_rows="dynamic",
-                use_container_width=True,
-                key="assumptions_editor",
+        st.subheader("Edit assumptions")
+        st.caption(
+            "Populate each schedule below to rebuild the model inputs manually. "
+            "The Demand & Conversion table controls the forecast years—add or remove years "
+            "there and the remaining schedules will stay in sync."
+        )
+
+        current_years = get_assumption_years()
+        add_col, remove_col, reset_col = st.columns([2, 2, 1])
+        with add_col:
+            default_year = (current_years[-1] + 1) if current_years else 2023
+            new_year_value = st.number_input(
+                "New forecast year",
+                value=default_year,
+                step=1,
+                key="assumptions_add_year",
             )
-            if st.button("Save assumptions", type="primary"):
+            if st.button("Add year", use_container_width=True, key="assumptions_add_year_btn"):
+                add_assumption_year(int(new_year_value))
+        with remove_col:
+            if current_years:
+                remove_choice = st.selectbox(
+                    "Remove forecast year",
+                    current_years,
+                    key="assumptions_remove_year",
+                )
+                if st.button(
+                    "Remove year", use_container_width=True, key="assumptions_remove_year_btn"
+                ):
+                    remove_assumption_year(int(remove_choice))
+            else:
+                st.selectbox(
+                    "Remove forecast year",
+                    ["No years available"],
+                    disabled=True,
+                    key="assumptions_remove_year_disabled",
+                )
+                st.button(
+                    "Remove year",
+                    use_container_width=True,
+                    disabled=True,
+                    key="assumptions_remove_year_btn_disabled",
+                )
+        with reset_col:
+            st.write("")
+            st.write("")
+            if st.button("Reset", use_container_width=True, key="assumptions_reset_btn"):
+                reset_assumption_tables()
+
+        tables: Dict[str, pd.DataFrame] = st.session_state.get("assumption_tables", {})
+        schedule_tabs = st.tabs([schedule["name"] for schedule in ASSUMPTION_SCHEDULES])
+        updated_tables: Dict[str, pd.DataFrame] = {}
+        for schedule, schedule_tab in zip(ASSUMPTION_SCHEDULES, schedule_tabs):
+            with schedule_tab:
+                st.caption(schedule["description"])
+                frame = tables.get(schedule["name"])
+                if frame is None:
+                    frame = create_blank_schedule(schedule["columns"], current_years)
+                column_config: Dict[str, Any] = {}
+                column_config["Year"] = st.column_config.NumberColumn(
+                    "Year",
+                    step=1,
+                    format="%d",
+                    disabled=not schedule.get("editable_year", False),
+                )
+                editor_key = "assumptions_" + "".join(
+                    char.lower() if char.isalnum() else "_" for char in schedule["name"]
+                )
+                updated = st.data_editor(
+                    frame,
+                    num_rows="dynamic" if schedule.get("editable_year", False) else "fixed",
+                    use_container_width=True,
+                    key=editor_key,
+                    column_config=column_config,
+                )
+                updated_tables[schedule["name"]] = updated
+
+        editable_schedule = next(
+            (schedule for schedule in ASSUMPTION_SCHEDULES if schedule.get("editable_year")),
+            None,
+        )
+        if editable_schedule:
+            base_table = updated_tables.get(editable_schedule["name"])
+            base_years = _normalize_year_list(base_table["Year"].tolist()) if base_table is not None else []
+            if base_years:
+                st.session_state["assumption_years"] = base_years
+        st.session_state["assumption_tables"] = sync_schedule_years(
+            st.session_state.get("assumption_years", current_years), updated_tables
+        )
+
+        if st.button("Save assumptions", type="primary"):
+            combined_df = combine_assumption_tables(st.session_state["assumption_tables"])
+            if combined_df.empty:
+                st.warning("Add at least one forecast year before saving assumptions.")
+            else:
+                payload = [
+                    {k: (None if pd.isna(v) else v) for k, v in row.items()}
+                    for row in combined_df.to_dict(orient="records")
+                ]
                 try:
                     with st.spinner("Saving assumptions..."):
-                        payload = [
-                            {k: (None if pd.isna(v) else v) for k, v in row.items()}
-                            for row in edited_df.to_dict(orient="records")
-                        ]
                         response = api_post("/save_assumptions", json=payload)
                     st.success(response.get("message", "Assumptions saved."))
                     st.session_state["assumptions_raw"] = payload
