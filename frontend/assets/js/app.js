@@ -7,13 +7,182 @@ import {
   renderMetricGrid,
   renderKeyValueTable,
   renderScheduleTable,
+  coerceValue,
 } from './tables.js';
 import { renderPlotlyChart } from './charts.js';
+
+const YEAR_COLUMN = 'Year';
+
+const ASSUMPTION_GROUPS = [
+  {
+    id: 'demand-pricing',
+    title: 'Demand & pricing',
+    description: 'Traffic, conversion, and pricing drivers used to project orders and revenue.',
+    columns: [
+      YEAR_COLUMN,
+      'Email Traffic',
+      'Organic Search Traffic',
+      'Paid Search Traffic',
+      'Affiliates Traffic',
+      'Email Conversion Rate',
+      'Organic Search Conversion Rate',
+      'Paid Search Conversion Rate',
+      'Affiliates Conversion Rate',
+      'Average Item Value',
+      'Number of Items per Order',
+      'Average Markdown',
+      'Average Promotion/Discount',
+      'Churn Rate',
+    ],
+  },
+  {
+    id: 'unit-economics',
+    title: 'Unit economics & acquisition costs',
+    description: 'COGS, fulfillment, and acquisition cost assumptions powering gross margin.',
+    columns: [
+      YEAR_COLUMN,
+      'COGS Percentage',
+      'Freight/Shipping per Order',
+      'Labor/Handling per Order',
+      'Email Cost per Click',
+      'Organic Search Cost per Click',
+      'Paid Search Cost per Click',
+      'Affiliates Cost per Click',
+      'Other',
+    ],
+  },
+  {
+    id: 'overhead',
+    title: 'Overhead & facilities',
+    description: 'Rent schedules, professional fees, and location-specific warehouse inputs.',
+    columns: [
+      YEAR_COLUMN,
+      'General Warehouse Rent',
+      'Office Rent',
+      'Rent Categories',
+      'Warehouse2 Square Meters',
+      'Warehouse2 Cost per SQM',
+      'Warehouse2',
+      'sun warehouse Square Meters',
+      'sun warehouse Cost per SQM',
+      'sun warehouse',
+      'new warehouse Square Meters',
+      'new warehouse Cost per SQM',
+      'new warehouse',
+      'Professional Fees',
+      'Professional Fee Types',
+      'Legal Cost',
+      'Legal',
+    ],
+  },
+  {
+    id: 'staffing',
+    title: 'Staffing structure',
+    description: 'Direct, indirect, and part-time staffing capacity with loaded hourly rates.',
+    columns: [
+      YEAR_COLUMN,
+      'Direct Staff Hours per Year',
+      'Direct Staff Number',
+      'Direct Staff Hourly Rate',
+      'Direct Staff Total Cost',
+      'Indirect Staff Hours per Year',
+      'Indirect Staff Number',
+      'Indirect Staff Hourly Rate',
+      'Indirect Staff Total Cost',
+      'Part-Time Staff Hours per Year',
+      'Part-Time Staff Number',
+      'Part-Time Staff Hourly Rate',
+      'Part-Time Staff Total Cost',
+    ],
+  },
+  {
+    id: 'leadership-benefits',
+    title: 'Leadership & benefits',
+    description: 'Executive compensation and benefit assumptions rolled into operating expenses.',
+    columns: [
+      YEAR_COLUMN,
+      'CEO Salary',
+      'COO Salary',
+      'CFO Salary',
+      'Director of HR Salary',
+      'CIO Salary',
+      'Salaries, Wages & Benefits',
+      'Pension Cost per Staff',
+      'Pension Total Cost',
+      'Medical Insurance Cost per Staff',
+      'Medical Insurance Total Cost',
+      'Child Benefit Cost per Staff',
+      'Child Benefit Total Cost',
+      'Car Benefit Cost per Staff',
+      'Car Benefit Total Cost',
+      'Total Benefits',
+    ],
+  },
+  {
+    id: 'working-capital',
+    title: 'Working capital & depreciation',
+    description: 'Depreciation schedules and cash conversion cycle levers.',
+    columns: [
+      YEAR_COLUMN,
+      'Depreciation',
+      'Accounts Receivable Days',
+      'Inventory Days',
+      'Accounts Payable Days',
+      'Technology Development',
+      'Office Equipment',
+      'Technology Depreciation Years',
+      'Office Equipment Depreciation Years',
+    ],
+  },
+  {
+    id: 'financing',
+    title: 'Financing & capital actions',
+    description: 'Interest, tax, and capital structure updates for each forecast year.',
+    columns: [
+      YEAR_COLUMN,
+      'Interest',
+      'Tax Rate',
+      'Interest Rate',
+      'Equity Raised',
+      'Dividends Paid',
+      'Debt Issued',
+      'legal_2024 Cost',
+      'legal_2024',
+      'legal_2025 Cost',
+      'legal_2025',
+    ],
+  },
+  {
+    id: 'assets',
+    title: 'Capital assets',
+    description: 'Long-lived asset balances and depreciation rates.',
+    columns: [
+      YEAR_COLUMN,
+      'Asset_1_Name',
+      'Asset_1_Amount',
+      'Asset_1_Rate',
+      'Asset_1_Depreciation',
+      'Asset_1_NBV',
+    ],
+  },
+  {
+    id: 'debt',
+    title: 'Debt schedules',
+    description: 'Outstanding debt instruments, rates, and durations feeding amortization.',
+    columns: [
+      YEAR_COLUMN,
+      'Debt_1_Name',
+      'Debt_1_Amount',
+      'Debt_1_Interest_Rate',
+      'Debt_1_Duration',
+    ],
+  },
+];
 
 const state = {
   assumptions: [],
   originalAssumptions: [],
-  assumptionColumns: [],
+  assumptionColumns: getDefaultAssumptionColumns(),
 };
 
 function init() {
@@ -90,13 +259,12 @@ function wireInputPage() {
 
   qs('#add-assumption-row').addEventListener('click', () => {
     if (state.assumptionColumns.length === 0) {
-      state.assumptionColumns = ['Year'];
+      state.assumptionColumns = getDefaultAssumptionColumns();
     }
-    const yearColumn = state.assumptionColumns.find((col) => col.toLowerCase() === 'year');
     let nextYear = new Date().getFullYear();
-    if (state.assumptions.length && yearColumn) {
+    if (state.assumptions.length) {
       const sortedYears = state.assumptions
-        .map((row) => Number(row[yearColumn]))
+        .map((row) => Number(row[YEAR_COLUMN]))
         .filter((num) => Number.isFinite(num))
         .sort((a, b) => a - b);
       if (sortedYears.length) {
@@ -105,31 +273,36 @@ function wireInputPage() {
     }
     const newRow = {};
     state.assumptionColumns.forEach((col) => {
-      newRow[col] = col === yearColumn ? nextYear : null;
+      newRow[col] = col === YEAR_COLUMN ? nextYear : null;
     });
     state.assumptions.push(newRow);
-    renderAssumptionsTable();
+    state.assumptions.sort((a, b) => Number(a[YEAR_COLUMN] || 0) - Number(b[YEAR_COLUMN] || 0));
+    renderAssumptionTables();
   });
 
   qs('#reset-assumptions').addEventListener('click', () => {
     state.assumptions = JSON.parse(JSON.stringify(state.originalAssumptions));
-    renderAssumptionsTable();
+    normalizeAssumptionRows();
+    renderAssumptionTables();
   });
 
   qs('#save-assumptions').addEventListener('click', async () => {
-    const wrapper = qs('#assumptions-table-wrapper');
-    const table = wrapper.querySelector('table');
-    if (!table) {
-      toast('Nothing to save yet. Load or add assumptions first.', { tone: 'error' });
-      return;
-    }
-    const payload = tableToData(table, state.assumptionColumns);
-    if (!payload.length) {
+    const collected = collectAssumptionsFromTables();
+    if (!collected.length) {
       toast('Add at least one year of assumptions before saving.', { tone: 'error' });
       return;
     }
     try {
-      const response = await apiPost('/save_assumptions', payload);
+      state.assumptions = collected.map((row) => ({ ...row }));
+      normalizeAssumptionRows();
+      const body = state.assumptions.map((row) => {
+        const entry = {};
+        state.assumptionColumns.forEach((column) => {
+          entry[column] = row[column] ?? null;
+        });
+        return entry;
+      });
+      const response = await apiPost('/save_assumptions', body);
       toast(response.message || 'Assumptions saved.');
       await refreshWorkbook('Load Existing');
     } catch (err) {
@@ -182,24 +355,15 @@ async function refreshWorkbook(action) {
       const rows = Object.values(response.data);
       state.assumptions = rows.map((row) => ({ ...row }));
       state.originalAssumptions = JSON.parse(JSON.stringify(state.assumptions));
-      const columnSet = new Set();
-      state.assumptions.forEach((row) => {
-        Object.keys(row).forEach((key) => columnSet.add(key));
-      });
-      state.assumptionColumns = Array.from(columnSet);
-      state.assumptionColumns.sort((a, b) => {
-        if (a === 'Year') return -1;
-        if (b === 'Year') return 1;
-        return a.localeCompare(b);
-      });
-      renderAssumptionsTable();
+      normalizeAssumptionRows();
+      renderAssumptionTables();
       qs('#file-status').textContent = response.exists
         ? `Loaded ${response.filename || 'financial_assumptions.xlsx'}`
         : 'Workbook not found yet. Use Start New or upload a file.';
     } else {
       state.assumptions = [];
-      state.assumptionColumns = [];
-      renderAssumptionsTable();
+      state.assumptionColumns = getDefaultAssumptionColumns();
+      renderAssumptionTables();
       qs('#file-status').textContent = 'No data returned. Upload a workbook to begin.';
     }
   } catch (err) {
@@ -208,11 +372,49 @@ async function refreshWorkbook(action) {
   }
 }
 
-function renderAssumptionsTable() {
-  const wrapper = qs('#assumptions-table-wrapper');
+function getDefaultAssumptionColumns() {
+  const ordered = [];
+  ASSUMPTION_GROUPS.forEach((group) => {
+    group.columns.forEach((column) => {
+      if (!ordered.includes(column)) {
+        ordered.push(column);
+      }
+    });
+  });
+  if (!ordered.includes(YEAR_COLUMN)) {
+    ordered.unshift(YEAR_COLUMN);
+  }
+  return ordered;
+}
+
+function normalizeAssumptionRows() {
+  const baseColumns = getDefaultAssumptionColumns();
+  const columnSet = new Set(baseColumns);
+  state.assumptions.forEach((row) => {
+    Object.keys(row).forEach((column) => columnSet.add(column));
+  });
+  const extras = Array.from(columnSet).filter((column) => !baseColumns.includes(column)).sort((a, b) => a.localeCompare(b));
+  state.assumptionColumns = [...baseColumns, ...extras].filter((column, index, arr) => arr.indexOf(column) === index);
+  if (!state.assumptionColumns.includes(YEAR_COLUMN)) {
+    state.assumptionColumns.unshift(YEAR_COLUMN);
+  }
+  state.assumptions.forEach((row) => {
+    state.assumptionColumns.forEach((column) => {
+      if (column === YEAR_COLUMN) return;
+      if (!(column in row)) {
+        row[column] = null;
+      }
+    });
+  });
+  state.assumptions.sort((a, b) => Number(a[YEAR_COLUMN] || 0) - Number(b[YEAR_COLUMN] || 0));
+}
+
+function renderAssumptionTables() {
+  const container = qs('#assumption-groups');
+  if (!container) return;
+  clear(container);
   if (!state.assumptions.length) {
-    clear(wrapper);
-    wrapper.append(
+    container.append(
       el('p', {
         className: 'status',
         textContent: 'No assumptions loaded yet. Use the controls above to load or create a workbook.',
@@ -220,8 +422,105 @@ function renderAssumptionsTable() {
     );
     return;
   }
-  const table = buildTable({ columns: state.assumptionColumns, rows: state.assumptions, editable: true });
-  mountTable(wrapper, table);
+
+  ASSUMPTION_GROUPS.forEach((group) => {
+    const availableColumns = group.columns.filter((column) => state.assumptionColumns.includes(column));
+    if (availableColumns.length <= 1) return;
+
+    const rows = state.assumptions.map((row, index) => {
+      const shaped = { __rowIndex: index };
+      availableColumns.forEach((column) => {
+        shaped[column] = row[column] ?? null;
+      });
+      return shaped;
+    });
+
+    const table = buildTable({ columns: availableColumns, rows, editable: true });
+    table.dataset.columns = JSON.stringify(availableColumns);
+    table.dataset.groupId = group.id;
+    table.classList.add('assumption-table');
+    table.addEventListener('input', handleAssumptionCellInput);
+
+    container.append(
+      el('section', {
+        className: 'assumption-group',
+        children: [
+          el('header', {
+            className: 'assumption-group__header',
+            children: [
+              el('h4', { textContent: group.title }),
+              group.description
+                ? el('p', {
+                    className: 'assumption-group__description',
+                    textContent: group.description,
+                  })
+                : null,
+            ],
+          }),
+          el('div', {
+            className: 'table-wrapper',
+            children: [table],
+          }),
+        ],
+      })
+    );
+  });
+}
+
+function handleAssumptionCellInput(event) {
+  const cell = event.target.closest('td');
+  if (!cell) return;
+  const column = cell.dataset.column;
+  if (!column || column === YEAR_COLUMN) return;
+  const rowIndex = Number(cell.dataset.rowIndex);
+  if (!Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= state.assumptions.length) return;
+  state.assumptions[rowIndex][column] = coerceValue(cell.textContent);
+}
+
+function collectAssumptionsFromTables() {
+  const tables = qsa('#assumption-groups table');
+  if (!tables.length) {
+    return [];
+  }
+  const merged = new Map();
+  tables.forEach((table) => {
+    let columns = [];
+    try {
+      columns = JSON.parse(table.dataset.columns || '[]');
+    } catch (err) {
+      columns = [];
+    }
+    if (!Array.isArray(columns) || columns.length === 0) {
+      return;
+    }
+    const rows = tableToData(table, columns);
+    rows.forEach((row) => {
+      const yearValue = row[YEAR_COLUMN];
+      if (yearValue == null || Number.isNaN(Number(yearValue))) {
+        return;
+      }
+      const year = Number(yearValue);
+      if (!merged.has(year)) {
+        merged.set(year, { [YEAR_COLUMN]: year });
+      }
+      const target = merged.get(year);
+      Object.entries(row).forEach(([key, value]) => {
+        if (key === YEAR_COLUMN) return;
+        target[key] = value ?? null;
+      });
+    });
+  });
+
+  const result = Array.from(merged.values());
+  result.forEach((row) => {
+    state.assumptionColumns.forEach((column) => {
+      if (!(column in row)) {
+        row[column] = null;
+      }
+    });
+  });
+  result.sort((a, b) => Number(a[YEAR_COLUMN] || 0) - Number(b[YEAR_COLUMN] || 0));
+  return result;
 }
 
 function wireMetricsPage() {

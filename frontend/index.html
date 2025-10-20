@@ -62,7 +62,7 @@
 
           <section class="card" aria-labelledby="assumptions-table-title">
             <div class="card-header">
-              <h3 id="assumptions-table-title">Yearly assumptions table</h3>
+              <h3 id="assumptions-table-title">Assumption tables</h3>
               <div class="card-actions">
                 <button id="add-assumption-row" class="secondary">Add year</button>
                 <button id="reset-assumptions" class="secondary">Reset edits</button>
@@ -70,7 +70,10 @@
               </div>
             </div>
             <div class="card-body">
-              <div class="table-wrapper" id="assumptions-table-wrapper" aria-live="polite"></div>
+              <p class="card-intro">
+                Update the underlying demand, cost, staffing, and financing assumptions for each forecast year. Edits are applied live across the tables below before exporting back to Excel.
+              </p>
+              <div class="assumption-groups" id="assumption-groups" aria-live="polite"></div>
             </div>
           </section>
 

@@ -246,16 +246,61 @@ textarea {
   font-size: 0.9rem;
 }
 
+.card-intro {
+  margin: 0 0 1rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.assumption-groups {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.assumption-group {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 1.25rem;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+}
+
+.assumption-group__header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.assumption-group__header h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.assumption-group__description {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .table-wrapper {
   overflow-x: auto;
   border-radius: 1.2rem;
   border: 1px solid var(--border);
 }
 
+.assumption-group .table-wrapper {
+  border: none;
+  border-radius: 0;
+  padding: 0.75rem 1.25rem 1.25rem;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.9rem;
+}
+
+.assumption-group table {
+  min-width: 640px;
 }
 
 thead {

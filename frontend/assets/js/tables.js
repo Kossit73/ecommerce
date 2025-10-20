@@ -12,6 +12,7 @@ export function buildTable({ columns, rows, editable = false }) {
 
   const tbody = el('tbody');
   rows.forEach((row, rowIndex) => {
+    const sourceIndex = typeof row.__rowIndex === 'number' ? row.__rowIndex : rowIndex;
     const tr = el('tr');
     columns.forEach((col) => {
       const value = row[col];
@@ -26,7 +27,7 @@ export function buildTable({ columns, rows, editable = false }) {
       if (editable) {
         cell.contentEditable = col === 'Year' ? 'false' : 'true';
         cell.dataset.column = col;
-        cell.dataset.rowIndex = rowIndex;
+        cell.dataset.rowIndex = String(sourceIndex);
       }
       tr.append(cell);
     });
@@ -55,7 +56,7 @@ export function tableToData(table, columns) {
   return rows;
 }
 
-function coerceValue(value) {
+export function coerceValue(value) {
   if (value === null || value === undefined) return value;
   const trimmed = String(value).trim();
   if (trimmed === '') return null;
