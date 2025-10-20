@@ -27,7 +27,7 @@ The console will now drive data ingestion, scenario management, visualization, r
 
 ## Features
 
-- **Input & Assumptions** – Upload or initialize the Excel workbook, edit yearly assumptions across dedicated demand, cost, staffing, asset, and financing tables, filter time periods, and run the base analysis workflow.
+- **Input & Assumptions** – Upload or initialize the Excel workbook, or rebuild the grouped assumption tables from the bundled template before editing demand, cost, staffing, asset, and financing values. Filter time periods and run the base analysis workflow once the backend is connected.
 - **Key Financial Metrics** – View summary KPIs, operational metrics, valuation snapshots, scenario comparisons, narrative implications, and Plotly-powered revenue/traffic/cash charts. Recompute scenarios with editable multipliers and rates.
 - **Financial Performance** – Inspect income statements, customer metrics, and waterfall, breakeven, funnel, and margin-trend visualizations derived from the active scenario.
 - **Financial Position** – Review balance sheet and capital asset schedules.

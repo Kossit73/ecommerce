@@ -10,6 +10,7 @@ import {
   coerceValue,
 } from './tables.js';
 import { renderPlotlyChart } from './charts.js';
+import { DEFAULT_ASSUMPTIONS } from './assumptions-template.js';
 
 const YEAR_COLUMN = 'Year';
 const DEFAULT_SCENARIO_TYPE = 'Base Case';
@@ -255,7 +256,7 @@ function init() {
   renderScenarioParameters();
   renderScenarioResult(state.scenarioResult);
   loadScenarioDefaults(state.scenario.type, { silent: true }).catch(() => {});
-  refreshWorkbook('Load Existing').catch(() => {});
+  applyTemplateAssumptions({ reason: 'Template loaded. Enter updated values to rebuild the workbook.' });
   loadKeyMetrics().catch(() => {});
   loadFinancialSchedules().catch(() => {});
 }
@@ -322,13 +323,9 @@ function initializeApiBase() {
 
 function wireInputPage() {
   qs('#refresh-file').addEventListener('click', () => refreshWorkbook('Load Existing'));
-  qs('#start-new').addEventListener('click', async () => {
-    try {
-      await refreshWorkbook('Start New');
-      toast('New workbook initialized.', { tone: 'info' });
-    } catch (err) {
-      toast(err.message, { tone: 'error' });
-    }
+  qs('#start-new').addEventListener('click', () => {
+    applyTemplateAssumptions({ reason: 'Template rebuilt. Update the values before saving.' });
+    toast('Template assumptions restored.', { tone: 'info' });
   });
 
   const uploadForm = qs('#upload-form');
@@ -460,8 +457,19 @@ async function refreshWorkbook(action) {
       qs('#file-status').textContent = 'No data returned. Upload a workbook to begin.';
     }
   } catch (err) {
-    qs('#file-status').textContent = `Error: ${err.message}`;
-    throw err;
+    qs('#file-status').textContent = `Error: ${err.message}. Using template assumptions instead.`;
+    applyTemplateAssumptions({ reason: 'Backend unavailable. Working from template assumptions.' });
+  }
+}
+
+function applyTemplateAssumptions({ reason } = {}) {
+  state.assumptions = DEFAULT_ASSUMPTIONS.map((row) => ({ ...row }));
+  state.originalAssumptions = JSON.parse(JSON.stringify(state.assumptions));
+  normalizeAssumptionRows();
+  renderAssumptionTables();
+  const status = qs('#file-status');
+  if (status) {
+    status.textContent = reason || 'Template assumptions loaded.';
   }
 }
 

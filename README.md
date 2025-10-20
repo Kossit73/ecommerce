@@ -92,6 +92,8 @@ console or the Streamlit app.
    console now provides the Input & Assumptions, Key Financial Metrics,
    Financial Performance, Financial Position, Cash Flow Statement, Sensitivity
    Analysis, and Advanced Analysis workflows showcased in the screenshot below.
+   If the backend is offline, the Input & Assumptions page seeds its tables with
+   a bundled template so you can rebuild the drivers manually before reconnecting.
 
 #### Option B: Streamlit console
 
