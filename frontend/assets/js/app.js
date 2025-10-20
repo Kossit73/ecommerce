@@ -12,6 +12,59 @@ import {
 import { renderPlotlyChart } from './charts.js';
 
 const YEAR_COLUMN = 'Year';
+const DEFAULT_SCENARIO_TYPE = 'Base Case';
+const SCENARIO_DEFAULTS = {
+  'Base Case': {
+    conversion_rate_mult: 1.0,
+    aov_mult: 1.0,
+    cogs_mult: 1.0,
+    interest_mult: 1.0,
+    labor_mult: 1.0,
+    material_mult: 1.0,
+    markdown_mult: 1.0,
+    political_risk: 0,
+    env_impact: 0,
+  },
+  'Best Case': {
+    conversion_rate_mult: 1.2,
+    aov_mult: 1.1,
+    cogs_mult: 0.95,
+    interest_mult: 0.9,
+    labor_mult: 0.9,
+    material_mult: 0.9,
+    markdown_mult: 0.9,
+    political_risk: 2,
+    env_impact: 2,
+  },
+  'Worst Case': {
+    conversion_rate_mult: 0.8,
+    aov_mult: 0.9,
+    cogs_mult: 1.05,
+    interest_mult: 1.2,
+    labor_mult: 1.2,
+    material_mult: 1.2,
+    markdown_mult: 1.1,
+    political_risk: 4,
+    env_impact: 4,
+  },
+};
+
+const SCENARIO_PARAM_LABELS = {
+  conversion_rate_mult: 'Conversion rate multiplier',
+  aov_mult: 'Average order value multiplier',
+  cogs_mult: 'COGS multiplier',
+  interest_mult: 'Interest multiplier',
+  labor_mult: 'Labor multiplier',
+  material_mult: 'Material multiplier',
+  markdown_mult: 'Markdown multiplier',
+  political_risk: 'Political risk',
+  env_impact: 'Environmental impact',
+};
+
+function getScenarioDefaults(type = DEFAULT_SCENARIO_TYPE) {
+  const defaults = SCENARIO_DEFAULTS[type] || SCENARIO_DEFAULTS[DEFAULT_SCENARIO_TYPE];
+  return { ...defaults };
+}
 
 const ASSUMPTION_GROUPS = [
   {
@@ -183,6 +236,11 @@ const state = {
   assumptions: [],
   originalAssumptions: [],
   assumptionColumns: getDefaultAssumptionColumns(),
+  scenario: {
+    type: DEFAULT_SCENARIO_TYPE,
+    params: getScenarioDefaults(),
+  },
+  scenarioResult: null,
 };
 
 function init() {
@@ -190,12 +248,17 @@ function init() {
   wireApiBaseInput();
   wireInputPage();
   wireMetricsPage();
+  wirePerformancePage();
+  wireCashflowPage();
   wireSensitivityPage();
   wireAdvancedPage();
+  renderScenarioParameters();
+  renderScenarioResult(state.scenarioResult);
   setApiBase(qs('#api-base').value || window.localStorage.getItem('ecom-api-base') || '');
   if (getApiBase()) {
     qs('#api-base').value = getApiBase();
   }
+  loadScenarioDefaults(state.scenario.type, { silent: true }).catch(() => {});
   refreshWorkbook('Load Existing').catch(() => {});
   loadKeyMetrics().catch(() => {});
   loadFinancialSchedules().catch(() => {});
@@ -210,8 +273,16 @@ function wireNavigation() {
       if (target === 'metrics-section') {
         loadKeyMetrics().catch((err) => toast(err.message, { tone: 'error' }));
       }
-      if (['performance-section', 'position-section', 'cashflow-section'].includes(target)) {
+      if (target === 'performance-section') {
         loadFinancialSchedules().catch((err) => toast(err.message, { tone: 'error' }));
+        loadPerformanceCharts().catch((err) => toast(`Performance charts failed: ${err.message}`, { tone: 'error' }));
+      }
+      if (target === 'position-section') {
+        loadFinancialSchedules().catch((err) => toast(err.message, { tone: 'error' }));
+      }
+      if (target === 'cashflow-section') {
+        loadFinancialSchedules().catch((err) => toast(err.message, { tone: 'error' }));
+        loadCashflowCharts().catch((err) => toast(`Cash flow charts failed: ${err.message}`, { tone: 'error' }));
       }
     });
   });
@@ -524,16 +595,70 @@ function collectAssumptionsFromTables() {
 }
 
 function wireMetricsPage() {
-  qs('#refresh-key-metrics').addEventListener('click', () => {
-    loadKeyMetrics().catch((err) => toast(err.message, { tone: 'error' }));
-  });
-  qs('#refresh-charts').addEventListener('click', () => {
-    loadCharts().catch((err) => toast(err.message, { tone: 'error' }));
-  });
+  const refreshMetricsBtn = qs('#refresh-key-metrics');
+  if (refreshMetricsBtn) {
+    refreshMetricsBtn.addEventListener('click', () => {
+      loadKeyMetrics().catch((err) => toast(err.message, { tone: 'error' }));
+    });
+  }
+
+  const refreshChartsBtn = qs('#refresh-charts');
+  if (refreshChartsBtn) {
+    refreshChartsBtn.addEventListener('click', () => {
+      loadCharts().catch((err) => toast(err.message, { tone: 'error' }));
+    });
+  }
+
+  const scenarioForm = qs('#scenario-form');
+  if (scenarioForm) {
+    scenarioForm.addEventListener('submit', handleScenarioSubmit);
+  }
+
+  const scenarioSelect = qs('#scenario-type');
+  if (scenarioSelect) {
+    scenarioSelect.value = state.scenario.type;
+    scenarioSelect.addEventListener('change', (event) => {
+      state.scenario.type = event.target.value;
+      loadScenarioDefaults(state.scenario.type, { silent: true }).catch(() => {});
+    });
+  }
+
+  const defaultsBtn = qs('#scenario-load-defaults');
+  if (defaultsBtn) {
+    defaultsBtn.addEventListener('click', () => {
+      loadScenarioDefaults(state.scenario.type, { silent: false }).catch(() => {});
+    });
+  }
+
+  const implicationsBtn = qs('#refresh-implications');
+  if (implicationsBtn) {
+    implicationsBtn.addEventListener('click', () => {
+      loadImplications();
+    });
+  }
+}
+
+function wirePerformancePage() {
+  const refreshBtn = qs('#refresh-performance-charts');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', () => {
+      loadPerformanceCharts().catch((err) => toast(`Performance charts failed: ${err.message}`, { tone: 'error' }));
+    });
+  }
+}
+
+function wireCashflowPage() {
+  const refreshBtn = qs('#refresh-cashflow-charts');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', () => {
+      loadCashflowCharts().catch((err) => toast(`Cash flow charts failed: ${err.message}`, { tone: 'error' }));
+    });
+  }
 }
 
 async function loadKeyMetrics() {
   await Promise.all([loadSummaryMetrics(), loadOperationalMetrics(), loadValuation(), loadScenarioMetrics(), loadCharts()]);
+  await loadImplications();
 }
 
 async function loadSummaryMetrics() {
@@ -609,6 +734,173 @@ async function loadScenarioMetrics() {
   }
 }
 
+function renderScenarioParameters() {
+  const container = qs('#scenario-params');
+  if (!container) return;
+  clear(container);
+  const params = state.scenario.params || getScenarioDefaults(state.scenario.type);
+  Object.entries(params).forEach(([key, value]) => {
+    const input = el('input', {
+      attrs: {
+        type: 'number',
+        step: '0.01',
+        name: key,
+        value: value ?? '',
+      },
+    });
+    input.addEventListener('input', (event) => {
+      const raw = event.target.value;
+      if (raw === '') {
+        state.scenario.params[key] = null;
+        return;
+      }
+      const numeric = Number(raw);
+      if (Number.isFinite(numeric)) {
+        state.scenario.params[key] = numeric;
+      }
+    });
+    container.append(
+      el('label', {
+        className: 'stack',
+        children: [
+          el('span', { textContent: formatScenarioLabel(key) }),
+          input,
+        ],
+      })
+    );
+  });
+}
+
+async function loadScenarioDefaults(type, { silent = false } = {}) {
+  const fallback = getScenarioDefaults(type);
+  try {
+    const response = await apiGet(`/get_scenario_parameters/${encodeURIComponent(type)}`);
+    const parameters = (response && (response.parameters || response)) || null;
+    if (parameters && typeof parameters === 'object') {
+      state.scenario.params = { ...fallback, ...parameters };
+      if (!silent) {
+        toast('Scenario defaults loaded.', { tone: 'success' });
+      }
+    } else {
+      state.scenario.params = fallback;
+      if (!silent) {
+        toast('Using built-in scenario defaults.', { tone: 'info' });
+      }
+    }
+  } catch (err) {
+    state.scenario.params = fallback;
+    const message = (err.message || '').toLowerCase();
+    if (!silent) {
+      if (message.includes('not authenticated')) {
+        toast('Sign in to load saved scenario defaults. Local defaults applied instead.', { tone: 'info' });
+      } else {
+        toast(`Failed to load scenario defaults: ${err.message}`, { tone: 'error' });
+      }
+    }
+  }
+  renderScenarioParameters();
+}
+
+function collectScenarioParams() {
+  const params = { ...getScenarioDefaults(state.scenario.type), ...(state.scenario.params || {}) };
+  const container = qs('#scenario-params');
+  if (container) {
+    qsa('input', container).forEach((input) => {
+      const name = input.name;
+      const raw = input.value;
+      if (!name || raw === '') return;
+      const numeric = Number(raw);
+      if (Number.isFinite(numeric)) {
+        params[name] = numeric;
+      }
+    });
+  }
+  return params;
+}
+
+async function handleScenarioSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const payload = {
+    scenario_type: state.scenario.type,
+    discount_rate: Number(form.discount_rate.value),
+    tax_rate: Number(form.tax_rate.value),
+    inflation_rate: Number(form.inflation_rate.value),
+    direct_labor_rate_increase: Number(form.direct_labor_rate_increase.value),
+    scenario_params: collectScenarioParams(),
+  };
+  const resultContainer = qs('#scenario-result');
+  try {
+    const response = await apiPost('/select_scenario', payload);
+    state.scenarioResult = response.scenario_df || null;
+    renderScenarioResult(state.scenarioResult, response.message);
+    toast(response.message || 'Scenario updated.');
+    await loadKeyMetrics().catch(() => {});
+    await loadFinancialSchedules().catch(() => {});
+    await loadPerformanceCharts().catch(() => {});
+    await loadCashflowCharts().catch(() => {});
+  } catch (err) {
+    if (resultContainer) {
+      clear(resultContainer);
+      resultContainer.append(
+        el('p', {
+          className: 'status',
+          textContent: `Scenario update failed: ${err.message}`,
+        })
+      );
+    }
+    toast(`Scenario update failed: ${err.message}`, { tone: 'error' });
+  }
+}
+
+function renderScenarioResult(rows, message) {
+  const container = qs('#scenario-result');
+  if (!container) return;
+  clear(container);
+  if (message) {
+    container.append(el('p', { className: 'status', textContent: message }));
+  }
+  if (Array.isArray(rows) && rows.length) {
+    const columns = Object.keys(rows[0]);
+    const table = buildTable({ columns, rows });
+    container.append(table);
+  } else if (!message) {
+    container.append(el('p', { className: 'status', textContent: 'Submit the form to generate scenario outputs.' }));
+  }
+}
+
+function formatScenarioLabel(key) {
+  return SCENARIO_PARAM_LABELS[key] || key.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+async function loadImplications() {
+  const container = qs('#implications-container');
+  if (!container) return;
+  try {
+    const response = await apiGet('/key_implications');
+    const items = response?.implications || response;
+    clear(container);
+    if (Array.isArray(items) && items.length) {
+      container.append(
+        el('ul', {
+          className: 'implications-list',
+          children: items.map((item) => el('li', { textContent: item })),
+        })
+      );
+    } else if (typeof items === 'string') {
+      container.append(el('p', { className: 'status', textContent: items }));
+    } else {
+      container.append(el('p', { className: 'status', textContent: 'No implications available.' }));
+    }
+  } catch (err) {
+    clear(container);
+    const message = (err.message || '').toLowerCase().includes('not authenticated')
+      ? 'Sign in to view qualitative implications.'
+      : `Failed to load implications: ${err.message}`;
+    container.append(el('p', { className: 'status', textContent: message }));
+  }
+}
+
 async function loadCharts() {
   try {
     const [revenue, traffic, profitability, cashflow] = await Promise.all([
@@ -617,10 +909,36 @@ async function loadCharts() {
       apiGet('/profitability_chart_data'),
       apiGet('/cashflow_forecast_chart_data'),
     ]);
-    renderPlotlyChart('revenue-chart', revenue?.traces || revenue);
-    renderPlotlyChart('traffic-chart', traffic?.traces || traffic);
-    renderPlotlyChart('profitability-chart', profitability?.traces || profitability);
-    renderPlotlyChart('cashflow-forecast-chart', cashflow?.traces || cashflow);
+    renderPlotlyChart(
+      'revenue-chart',
+      buildRevenueTraces(revenue?.revenue_chart_data || revenue?.data || revenue),
+      {
+        barmode: 'group',
+        yaxis: { title: 'Net revenue', tickprefix: '$', separatethousands: true },
+        yaxis2: { title: 'Margins', overlaying: 'y', side: 'right', tickformat: '.0%' },
+        legend: { orientation: 'h', y: -0.2 },
+      }
+    );
+    renderPlotlyChart(
+      'traffic-chart',
+      buildTrafficTraces(traffic?.traffic_chart_data || traffic?.data || traffic),
+      {
+        barmode: 'group',
+        yaxis: { title: 'LTV & CAC', tickprefix: '$', separatethousands: true },
+        yaxis2: { title: 'LTV to CAC ratio', overlaying: 'y', side: 'right' },
+        legend: { orientation: 'h', y: -0.2 },
+      }
+    );
+    renderPlotlyChart(
+      'profitability-chart',
+      buildProfitabilityTraces(profitability?.profitability_chart_data || profitability?.data || profitability),
+      { yaxis: { title: 'Closing cash balance', tickprefix: '$', separatethousands: true } }
+    );
+    renderPlotlyChart(
+      'cashflow-forecast-chart',
+      buildCashflowForecastTraces(cashflow?.cashflow_forecast_chart_data || cashflow?.data || cashflow),
+      { barmode: 'group', yaxis: { title: 'Cash flow', tickprefix: '$', separatethousands: true } }
+    );
   } catch (err) {
     toast(`Failed to load charts: ${err.message}`, { tone: 'error' });
     throw err;
@@ -752,7 +1070,338 @@ function wireSensitivityPage() {
   });
 }
 
+async function loadPerformanceCharts() {
+  const chartIds = ['waterfall-chart', 'breakeven-chart', 'consideration-chart', 'margin-safety-chart', 'margin-trends-chart'];
+  try {
+    const [waterfall, breakeven, consideration, marginSafety, marginTrends] = await Promise.all([
+      apiGet('/waterfall_chart_data'),
+      apiGet('/breakeven_chart_data'),
+      apiGet('/consideration_chart_data'),
+      apiGet('/margin_safety_chart'),
+      apiGet('/profitability_margin_trends_chart_data'),
+    ]);
+    renderPlotlyChart('waterfall-chart', buildWaterfallTrace(waterfall?.data || waterfall), {
+      showlegend: false,
+    });
+    renderPlotlyChart('breakeven-chart', buildBreakevenTraces(breakeven?.data || breakeven), {
+      yaxis: { title: 'Revenue', tickprefix: '$', separatethousands: true },
+      legend: { orientation: 'h', y: -0.2 },
+    });
+    renderPlotlyChart('consideration-chart', buildConsiderationTraces(consideration?.data || consideration), {
+      yaxis: { title: 'Consideration rates', tickformat: '.0%' },
+      legend: { orientation: 'h', y: -0.2 },
+    });
+    renderPlotlyChart('margin-safety-chart', buildMarginSafetyTraces(marginSafety?.data || marginSafety), {
+      yaxis: { title: 'Margin of safety ($)', tickprefix: '$', separatethousands: true },
+      yaxis2: { title: 'Margin of safety %', overlaying: 'y', side: 'right', tickformat: '.0%' },
+      legend: { orientation: 'h', y: -0.2 },
+    });
+    renderPlotlyChart('margin-trends-chart', buildMarginTrendTraces(marginTrends?.data || marginTrends), {
+      yaxis: { title: 'Margin %', tickformat: '.0%' },
+      legend: { orientation: 'h', y: -0.2 },
+    });
+  } catch (err) {
+    showChartError(chartIds, `Failed to load performance charts: ${err.message}`);
+    throw err;
+  }
+}
+
+async function loadCashflowCharts() {
+  const chartIds = ['cashflow-forecast-detailed', 'dcf-summary-chart'];
+  try {
+    const [cashflow, dcfSummary] = await Promise.all([
+      apiGet('/cashflow_forecast_chart_data'),
+      apiGet('/dcf_summary_chart_data'),
+    ]);
+    renderPlotlyChart(
+      'cashflow-forecast-detailed',
+      buildCashflowForecastTraces(cashflow?.cashflow_forecast_chart_data || cashflow?.data || cashflow),
+      { barmode: 'group', yaxis: { title: 'Cash flow', tickprefix: '$', separatethousands: true } }
+    );
+    renderPlotlyChart('dcf-summary-chart', buildWaterfallTrace(dcfSummary?.data || dcfSummary), {
+      showlegend: false,
+    });
+  } catch (err) {
+    showChartError(chartIds, `Failed to load cash flow charts: ${err.message}`);
+    throw err;
+  }
+}
+
+function showChartError(ids, message) {
+  ids.forEach((id) => {
+    const node = document.getElementById(id);
+    if (node) {
+      node.innerHTML = `<p class="status">${message}</p>`;
+    }
+  });
+}
+
+function buildRevenueTraces(data = {}) {
+  const years = ensureArray(data.years);
+  const traces = [];
+  const revenue = toNumberSeries(data.net_revenue);
+  const grossMargin = toPercentSeries(data.gross_margin);
+  const ebitdaMargin = toPercentSeries(data.ebitda_margin);
+  if (years.length && revenue.some(isFiniteNumber)) {
+    traces.push({
+      type: 'bar',
+      name: 'Net Revenue',
+      x: years,
+      y: revenue,
+      marker: { color: '#2563eb' },
+    });
+  }
+  if (years.length && grossMargin.some(isFiniteNumber)) {
+    traces.push({
+      type: 'scatter',
+      mode: 'lines+markers',
+      name: 'Gross Margin',
+      x: years,
+      y: grossMargin,
+      yaxis: 'y2',
+      marker: { color: '#0ea5e9' },
+      line: { width: 3 },
+    });
+  }
+  if (years.length && ebitdaMargin.some(isFiniteNumber)) {
+    traces.push({
+      type: 'scatter',
+      mode: 'lines+markers',
+      name: 'EBITDA Margin',
+      x: years,
+      y: ebitdaMargin,
+      yaxis: 'y2',
+      marker: { color: '#a855f7' },
+      line: { dash: 'dot', width: 3 },
+    });
+  }
+  return traces;
+}
+
+function buildTrafficTraces(data = {}) {
+  const years = ensureArray(data.years);
+  const ltv = toNumberSeries(data.ltv);
+  const cac = toNumberSeries(data.cac);
+  const ratio = toNumberSeries(data.ltv_cac_ratio);
+  const traces = [];
+  if (years.length && ltv.some(isFiniteNumber)) {
+    traces.push({ type: 'bar', name: 'LTV', x: years, y: ltv, marker: { color: '#22c55e' } });
+  }
+  if (years.length && cac.some(isFiniteNumber)) {
+    traces.push({ type: 'bar', name: 'CAC', x: years, y: cac, marker: { color: '#ef4444' } });
+  }
+  if (years.length && ratio.some(isFiniteNumber)) {
+    traces.push({
+      type: 'scatter',
+      mode: 'lines+markers',
+      name: 'LTV / CAC Ratio',
+      x: years,
+      y: ratio,
+      yaxis: 'y2',
+      marker: { color: '#6366f1' },
+      line: { width: 3 },
+    });
+  }
+  return traces;
+}
+
+function buildProfitabilityTraces(data = {}) {
+  const years = ensureArray(data.years);
+  const balance = toNumberSeries(data.closing_cash_balance);
+  if (!years.length || !balance.some(isFiniteNumber)) return [];
+  return [
+    {
+      type: 'scatter',
+      mode: 'lines+markers',
+      name: 'Closing Cash Balance',
+      x: years,
+      y: balance,
+      line: { color: '#f97316', width: 3 },
+      marker: { color: '#f97316' },
+    },
+  ];
+}
+
+function buildCashflowForecastTraces(data = {}) {
+  const years = ensureArray(data.years);
+  const operations = toNumberSeries(data.cash_from_operations);
+  const investing = toNumberSeries(data.cash_from_investing);
+  const net = toNumberSeries(data.net_cash_flow);
+  const traces = [];
+  if (years.length && operations.some(isFiniteNumber)) {
+    traces.push({ type: 'bar', name: 'Operations', x: years, y: operations, marker: { color: '#22c55e' } });
+  }
+  if (years.length && investing.some(isFiniteNumber)) {
+    traces.push({ type: 'bar', name: 'Investing', x: years, y: investing, marker: { color: '#f59e0b' } });
+  }
+  if (years.length && net.some(isFiniteNumber)) {
+    traces.push({
+      type: 'scatter',
+      mode: 'lines+markers',
+      name: 'Net Cash Flow',
+      x: years,
+      y: net,
+      marker: { color: '#0ea5e9' },
+      line: { width: 3 },
+    });
+  }
+  return traces;
+}
+
+function buildWaterfallTrace(data = {}) {
+  const categories = ensureArray(data.categories);
+  const values = toNumberSeries(data.values);
+  const measures = ensureArray(data.measures);
+  if (!categories.length || !values.some(isFiniteNumber)) return [];
+  return [
+    {
+      type: 'waterfall',
+      name: data.title || 'Bridge',
+      orientation: 'v',
+      x: categories,
+      measure: measures.length === categories.length ? measures : undefined,
+      y: values,
+      increasing: { marker: { color: '#22c55e' } },
+      decreasing: { marker: { color: '#ef4444' } },
+      totals: { marker: { color: '#6366f1' } },
+    },
+  ];
+}
+
+function buildBreakevenTraces(data = {}) {
+  const years = ensureArray(data.years);
+  const breakEven = toNumberSeries(data.break_even_dollars);
+  const actual = toNumberSeries(data.actual_sales);
+  const traces = [];
+  if (years.length && breakEven.some(isFiniteNumber)) {
+    traces.push({ type: 'scatter', mode: 'lines+markers', name: 'Break-even', x: years, y: breakEven, line: { color: '#ef4444', width: 3 } });
+  }
+  if (years.length && actual.some(isFiniteNumber)) {
+    traces.push({ type: 'scatter', mode: 'lines+markers', name: 'Actual Sales', x: years, y: actual, line: { color: '#22c55e', width: 3 } });
+  }
+  return traces;
+}
+
+function buildConsiderationTraces(data = {}) {
+  const years = ensureArray(data.years);
+  const consideration = toPercentSeries(data.weighted_consideration_rate);
+  const conversion = toPercentSeries(data.consideration_to_conversion);
+  const traces = [];
+  if (years.length && consideration.some(isFiniteNumber)) {
+    traces.push({
+      type: 'scatter',
+      mode: 'lines+markers',
+      name: 'Weighted consideration rate',
+      x: years,
+      y: consideration,
+      line: { color: '#0ea5e9', width: 3 },
+    });
+  }
+  if (years.length && conversion.some(isFiniteNumber)) {
+    traces.push({
+      type: 'scatter',
+      mode: 'lines+markers',
+      name: 'Consideration to conversion',
+      x: years,
+      y: conversion,
+      line: { color: '#6366f1', width: 3, dash: 'dot' },
+    });
+  }
+  return traces;
+}
+
+function buildMarginSafetyTraces(data = {}) {
+  const years = ensureArray(data.years);
+  const dollars = toNumberSeries(data.margin_safety_dollars);
+  const percent = toPercentSeries(data.margin_safety_percentage);
+  const traces = [];
+  if (years.length && dollars.some(isFiniteNumber)) {
+    traces.push({ type: 'bar', name: 'Margin of safety ($)', x: years, y: dollars, marker: { color: '#14b8a6' } });
+  }
+  if (years.length && percent.some(isFiniteNumber)) {
+    traces.push({
+      type: 'scatter',
+      mode: 'lines+markers',
+      name: 'Margin of safety %',
+      x: years,
+      y: percent,
+      yaxis: 'y2',
+      line: { color: '#0ea5e9', width: 3 },
+    });
+  }
+  return traces;
+}
+
+function buildMarginTrendTraces(data = {}) {
+  const years = ensureArray(data.years);
+  const gross = toPercentSeries(data.gross_margin);
+  const ebitda = toPercentSeries(data.ebitda_margin);
+  const net = toPercentSeries(data.net_profit_margin);
+  const traces = [];
+  if (years.length && gross.some(isFiniteNumber)) {
+    traces.push({ type: 'scatter', mode: 'lines+markers', name: 'Gross margin', x: years, y: gross, line: { color: '#22c55e', width: 3 } });
+  }
+  if (years.length && ebitda.some(isFiniteNumber)) {
+    traces.push({ type: 'scatter', mode: 'lines+markers', name: 'EBITDA margin', x: years, y: ebitda, line: { color: '#6366f1', width: 3 } });
+  }
+  if (years.length && net.some(isFiniteNumber)) {
+    traces.push({ type: 'scatter', mode: 'lines+markers', name: 'Net profit margin', x: years, y: net, line: { color: '#f97316', width: 3 } });
+  }
+  return traces;
+}
+
+function ensureArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function toNumberSeries(values) {
+  return ensureArray(values).map((val) => (typeof val === 'number' && Number.isFinite(val) ? val : null));
+}
+
+function toPercentSeries(values) {
+  return ensureArray(values).map((val) => {
+    if (typeof val === 'number' && Number.isFinite(val)) {
+      return val / 100;
+    }
+    return null;
+  });
+}
+
+function isFiniteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
 function wireAdvancedPage() {
+  const downloadBtn = qs('#download-report');
+  const downloadStatus = qs('#download-status');
+  if (downloadBtn) {
+    downloadBtn.addEventListener('click', async () => {
+      if (downloadStatus) {
+        downloadStatus.textContent = 'Preparing download…';
+      }
+      try {
+        const blob = await apiGet('/export_excel');
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'ecommerce_report.xlsx';
+        document.body.append(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        if (downloadStatus) {
+          downloadStatus.textContent = 'Download ready.';
+        }
+        toast('Excel report downloaded.', { tone: 'success' });
+      } catch (err) {
+        if (downloadStatus) {
+          downloadStatus.textContent = `Export failed: ${err.message}`;
+        }
+        toast(`Export failed: ${err.message}`, { tone: 'error' });
+      }
+    });
+  }
+
   qs('#monte-carlo-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = event.currentTarget;

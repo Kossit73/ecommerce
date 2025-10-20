@@ -24,12 +24,12 @@ The console will now drive data ingestion, scenario management, visualization, r
 ## Features
 
 - **Input & Assumptions** – Upload or initialize the Excel workbook, edit yearly assumptions across dedicated demand, cost, staffing, asset, and financing tables, filter time periods, and run the base analysis workflow.
-- **Key Financial Metrics** – View summary KPIs, operational metrics, valuation snapshots, scenario comparisons, and Plotly-powered charts.
-- **Financial Performance** – Inspect income statements and customer metrics derived from the active scenario.
+- **Key Financial Metrics** – View summary KPIs, operational metrics, valuation snapshots, scenario comparisons, narrative implications, and Plotly-powered revenue/traffic/cash charts. Recompute scenarios with editable multipliers and rates.
+- **Financial Performance** – Inspect income statements, customer metrics, and waterfall, breakeven, funnel, and margin-trend visualizations derived from the active scenario.
 - **Financial Position** – Review balance sheet and capital asset schedules.
-- **Cash Flow Statement** – Explore detailed cash flow schedules and debt amortization tables.
+- **Cash Flow Statement** – Explore detailed cash flow schedules, debt amortization tables, and DCF/cash-flow forecast charts.
 - **Sensitivity Analysis** – Trigger top-rank sensitivity, what-if overlays, and goal seek calculations.
-- **Advanced Analysis** – Launch Monte Carlo, schedule risk, neural tools, decision trees, statistical forecasts, and Evolver optimization routines.
+- **Advanced Analysis** – Launch Monte Carlo, schedule risk, neural tools, decision trees, statistical forecasts, Evolver optimization routines, and export the consolidated Excel workbook.
 
 ## Customization
 

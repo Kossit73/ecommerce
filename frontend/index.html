@@ -145,6 +145,53 @@
 
           <section class="card">
             <div class="card-header">
+              <h3>Scenario management</h3>
+              <div class="card-actions">
+                <button type="button" id="scenario-load-defaults" class="secondary">Reset to defaults</button>
+              </div>
+            </div>
+            <div class="card-body">
+              <form id="scenario-form" class="stack">
+                <label>Scenario type
+                  <select name="scenario_type" id="scenario-type">
+                    <option value="Base Case">Base Case</option>
+                    <option value="Best Case">Best Case</option>
+                    <option value="Worst Case">Worst Case</option>
+                  </select>
+                </label>
+                <div class="scenario-grid" id="scenario-params" aria-live="polite"></div>
+                <div class="two-column">
+                  <label>Discount rate
+                    <input type="number" step="0.01" name="discount_rate" value="0.2" required />
+                  </label>
+                  <label>Tax rate
+                    <input type="number" step="0.01" name="tax_rate" value="0" required />
+                  </label>
+                  <label>Inflation rate
+                    <input type="number" step="0.01" name="inflation_rate" value="0" required />
+                  </label>
+                  <label>Labor increase
+                    <input type="number" step="0.01" name="direct_labor_rate_increase" value="0" required />
+                  </label>
+                </div>
+                <button type="submit" class="primary">Recompute scenario</button>
+              </form>
+              <div id="scenario-result" class="scenario-result"></div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header">
+              <h3>Narrative implications</h3>
+              <button id="refresh-implications" class="secondary">Refresh</button>
+            </div>
+            <div class="card-body" id="implications-container">
+              <p class="status">Sign in and refresh to load qualitative implications.</p>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header">
               <h3>Revenue &amp; profitability charts</h3>
               <div class="card-actions">
                 <button id="refresh-charts" class="secondary">Refresh charts</button>
@@ -171,6 +218,21 @@
           <section class="card">
             <div class="card-header"><h3>Customer metrics</h3></div>
             <div class="card-body" id="customer-metrics-container"></div>
+          </section>
+          <section class="card">
+            <div class="card-header">
+              <h3>Performance charts</h3>
+              <div class="card-actions">
+                <button id="refresh-performance-charts" class="secondary">Refresh charts</button>
+              </div>
+            </div>
+            <div class="chart-grid">
+              <div id="waterfall-chart" class="chart"></div>
+              <div id="breakeven-chart" class="chart"></div>
+              <div id="consideration-chart" class="chart"></div>
+              <div id="margin-safety-chart" class="chart"></div>
+              <div id="margin-trends-chart" class="chart"></div>
+            </div>
           </section>
         </article>
 
@@ -201,6 +263,18 @@
           <section class="card">
             <div class="card-header"><h3>Debt amortization</h3></div>
             <div class="card-body" id="debt-schedule-container"></div>
+          </section>
+          <section class="card">
+            <div class="card-header">
+              <h3>Cash flow visuals</h3>
+              <div class="card-actions">
+                <button id="refresh-cashflow-charts" class="secondary">Refresh charts</button>
+              </div>
+            </div>
+            <div class="chart-grid">
+              <div id="cashflow-forecast-detailed" class="chart"></div>
+              <div id="dcf-summary-chart" class="chart"></div>
+            </div>
           </section>
         </article>
 
@@ -269,6 +343,15 @@
             <h2>Advanced analysis</h2>
             <p>Access Monte Carlo simulations, forecasting, schedule risk, neural tools, and optimization utilities.</p>
           </header>
+
+          <section class="card">
+            <div class="card-header"><h3>Reporting &amp; exports</h3></div>
+            <div class="card-body stack">
+              <p class="status">Download the consolidated Excel workbook with the latest filtered scenario.</p>
+              <button id="download-report" type="button" class="secondary">Download Excel report</button>
+              <p id="download-status" class="status" aria-live="polite"></p>
+            </div>
+          </section>
 
           <section class="card">
             <div class="card-header"><h3>Monte Carlo simulation</h3></div>
