@@ -69,12 +69,13 @@ console or the Streamlit app.
    python -m http.server 3000 --directory frontend
    ```
 
-3. Visit `http://localhost:3000/index.html?apiBase=http://localhost:8002`. The
-   `apiBase` query parameter configures the backend target and is saved to
-   `localStorage` for future visits. The browser console now provides the Input
-   & Assumptions, Key Financial Metrics, Financial Performance, Financial
-   Position, Cash Flow Statement, Sensitivity Analysis, and Advanced Analysis
-   workflows showcased in the screenshot below.
+3. Visit `http://localhost:3000/index.html`. The console automatically targets
+   the backend based on the page origin. You can optionally override the
+   FastAPI base via the `?apiBase=` query parameter, a global `window.ECOM_API_BASE`
+   assignment, or previously saved settings in `localStorage`. The browser
+   console now provides the Input & Assumptions, Key Financial Metrics,
+   Financial Performance, Financial Position, Cash Flow Statement, Sensitivity
+   Analysis, and Advanced Analysis workflows showcased in the screenshot below.
 
 #### Option B: Streamlit console
 
@@ -82,11 +83,12 @@ console or the Streamlit app.
 2. In a new terminal, launch Streamlit with the packaged dashboard:
 
    ```bash
-   streamlit run streamlit_app.py -- --api-base http://localhost:8002
+   streamlit run streamlit_app.py
    ```
 
 3. Your browser will open to a multi-tab experience mirroring the static web
-   console. Use the sidebar to adjust the API base URL if needed.
+   console. Configure the FastAPI base URL from the sidebar if your backend is
+   not running on the default `http://localhost:8000`.
 
 ## Important Note
 

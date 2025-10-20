@@ -17,7 +17,11 @@ All assets are plain text, so no Node.js build or `react-scripts` runtime is req
    python -m http.server 3000 --directory frontend
    ```
 
-3. Visit `http://localhost:3000/index.html?apiBase=http://localhost:8000`. The query parameter configures the FastAPI base URL and the value is persisted in `localStorage` for subsequent visits.
+3. Visit `http://localhost:3000/index.html`. The console will automatically
+   target the FastAPI service based on the page origin. You can optionally add
+   a query parameter such as `?apiBase=http://localhost:8000` or define
+   `window.ECOM_API_BASE` in `index.html` to hard-code another backend. The
+   final base URL is persisted in `localStorage` for subsequent visits.
 
 The console will now drive data ingestion, scenario management, visualization, reporting, and advanced analytics through the FastAPI endpoints. No package installation steps are necessary.
 
