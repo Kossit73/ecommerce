@@ -922,55 +922,6 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
 
         ensure_assumption_tables()
 
-        action_cols = st.columns(3)
-        if action_cols[0].button("Load existing workbook", use_container_width=True):
-            try:
-                with st.spinner("Loading existing workbook..."):
-                    response = api_get("/file_action", params={"action": "Load Existing"})
-                set_assumptions_data(response.get("data") or [])
-                st.session_state["file_status"] = response
-                st.success("Existing workbook loaded.")
-            except RuntimeError as exc:
-                st.error(str(exc))
-
-        if action_cols[1].button("Start new workbook", use_container_width=True):
-            try:
-                with st.spinner("Starting new workbook..."):
-                    response = api_get("/file_action", params={"action": "Start New"})
-                set_assumptions_data(response.get("data") or [])
-                st.session_state["file_status"] = response
-                st.success("Blank workbook initialized.")
-            except RuntimeError as exc:
-                st.error(str(exc))
-
-        with action_cols[2]:
-            uploaded = st.file_uploader(
-                "Upload Excel assumptions", type=["xlsx"], label_visibility="collapsed"
-            )
-            if uploaded is not None and st.button("Send upload"):
-                try:
-                    with st.spinner("Uploading workbook..."):
-                        files = {
-                            "file": (
-                                uploaded.name,
-                                uploaded.getvalue(),
-                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            )
-                        } 
-                        response = api_post("/upload_file", files=files)
-                    set_assumptions_data(response.get("data") or [])
-                    st.session_state["file_status"] = response
-                    st.success("Workbook uploaded and processed.")
-                except RuntimeError as exc:
-                    st.error(str(exc))
-
-        if st.session_state.get("file_status"):
-            status = st.session_state["file_status"]
-            st.caption(
-                f"Current file: {status.get('filename', 'financial_assumptions.xlsx')}"
-                f" | Exists: {status.get('exists', False)}"
-            )
-
         st.subheader("Edit assumptions")
         st.caption(
             "Populate each schedule below to rebuild the model inputs manually. "
