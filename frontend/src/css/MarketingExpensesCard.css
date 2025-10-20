@@ -1,0 +1,98 @@
+
+.marketing-card {
+    margin-bottom: 24px;
+    width: 100%;
+  }
+  
+  .marketing-content {
+    display: flex;
+    justify-content: space-between;
+    gap: 32px;
+  }
+  
+  .marketing-left,
+  .marketing-right {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  
+  .section-title {
+    margin-top: 12px;
+    font-weight: bold;
+  }
+  
+  .table-row {
+    align-items: center;
+  }
+  .staff-costs-header,
+.staff-costs-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.staff-costs-header {
+  font-weight: bold;
+  font-size: 0.875rem;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.staff-costs-row span {
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+}
+
+.staff-costs-row .MuiTextField-root {
+  width: 100%;
+}
+
+.exec-salary-header,
+.exec-salary-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.exec-salary-header {
+  font-weight: bold;
+  font-size: 0.875rem;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.exec-salary-row span {
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+}
+
+
+.benefits-header,
+.benefits-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.benefits-header {
+  font-weight: bold;
+  font-size: 0.875rem;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.benefits-row span {
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+}
