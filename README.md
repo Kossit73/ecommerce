@@ -55,6 +55,39 @@ uvicorn main:app --reload --log-level debug --port 8002
 
 The API will be available at `http://localhost:8002`.
 
+### 5. Launch a User Interface
+
+You can work with the ecommerce financial model through either the static web
+console or the Streamlit app.
+
+#### Option A: Static HTML console
+
+1. From the project root, start the FastAPI service (see step 4 above).
+2. Serve the `frontend/` directory with any HTTP server. For example:
+
+   ```bash
+   python -m http.server 3000 --directory frontend
+   ```
+
+3. Visit `http://localhost:3000/index.html`, set the **API Base URL** at the
+   top-right of the page to `http://localhost:8002`, and click **Apply**. The
+   browser console now provides the Input & Assumptions, Key Financial Metrics,
+   Financial Performance, Financial Position, Cash Flow Statement, Sensitivity
+   Analysis, and Advanced Analysis workflows showcased in the screenshot
+   below.
+
+#### Option B: Streamlit console
+
+1. Ensure the backend is running (step 4).
+2. In a new terminal, launch Streamlit with the packaged dashboard:
+
+   ```bash
+   streamlit run streamlit_app.py -- --api-base http://localhost:8002
+   ```
+
+3. Your browser will open to a multi-tab experience mirroring the static web
+   console. Use the sidebar to adjust the API base URL if needed.
+
 ## Important Note
 
 The APIs for retrieving financial schedules and running analysis depend on data loaded into the backend. You **must** first call the `/api/ecommerce/file_action?action=Load%20Existing` API to load the financial data from `financial_assumptions.xlsx` before other APIs can function correctly.
