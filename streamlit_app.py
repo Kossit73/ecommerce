@@ -19,6 +19,7 @@ import streamlit as st
 st.set_page_config(page_title="Ecommerce Financial Model", layout="wide", page_icon="💼")
 
 DEFAULT_API_BASE = "http://localhost:8000"
+API_BASE_ENV_VARS = ("ECOMMERCE_API_BASE", "ECOM_API_BASE", "API_BASE_URL")
 SCENARIO_TYPES = ["Base Case", "Best Case", "Worst Case"]
 SCENARIO_DEFAULTS = {
     "Base Case": {
@@ -119,7 +120,15 @@ SCHEDULE_OPTIONS = {
 
 
 def get_api_base() -> str:
-    return st.session_state.setdefault("api_base_url", DEFAULT_API_BASE)
+    if "api_base_url" not in st.session_state:
+        for env_var in API_BASE_ENV_VARS:
+            candidate = os.environ.get(env_var)
+            if candidate:
+                set_api_base(candidate)
+                break
+        else:
+            st.session_state["api_base_url"] = DEFAULT_API_BASE
+    return st.session_state["api_base_url"]
 
 
 def set_api_base(url: str) -> None:
@@ -393,11 +402,10 @@ def render_schedule_section(title: str, schedules: Iterable[Dict[str, Any]]) -> 
 
 def configure_sidebar() -> None:
     with st.sidebar:
-        st.header("API configuration")
-        api_base_input = st.text_input("FastAPI base URL", value=get_api_base())
-        if api_base_input != get_api_base():
-            set_api_base(api_base_input)
-        if st.button("Test connection"):
+        st.header("Workspace status")
+        base_url = get_api_base()
+        st.markdown(f"**API endpoint**\n\n`{base_url}`")
+        if st.button("Check backend connection"):
             try:
                 with st.spinner("Contacting API..."):
                     response = api_get("/file_action", params={"action": "Load Existing"})
@@ -407,8 +415,10 @@ def configure_sidebar() -> None:
 
         st.markdown(
             """
-            Configure the FastAPI endpoint and use the tabs to manage assumptions,
-            recalculate scenarios, review performance, and run analytics.
+            The dashboard automatically selects the FastAPI endpoint. Override it by
+            setting the `ECOMMERCE_API_BASE` environment variable before launching the
+            app, then use the tabs to manage assumptions, recalculate scenarios,
+            review performance, and run analytics.
             """
         )
 

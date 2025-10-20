@@ -107,8 +107,9 @@ console or the Streamlit app.
    ```
 
 3. Your browser will open to a multi-tab experience mirroring the static web
-   console. Configure the FastAPI base URL from the sidebar if your backend is
-   not running on the default `http://localhost:8000`.
+   console. The app auto-detects the FastAPI base; set the
+   `ECOMMERCE_API_BASE` environment variable before launching Streamlit if your
+   backend is not running on the default `http://localhost:8000`.
 
 ## Important Note
 
