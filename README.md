@@ -34,11 +34,27 @@ Activate the virtual environment based on your operating system:
 
 ### 3. Install Dependencies
 
-Install the required Python packages listed in `requirements.txt`:
+Choose the dependency set that matches the component you plan to run:
 
-```bash
-pip install -r requirements.txt
-```
+- **Streamlit dashboard (default on Streamlit Cloud):**
+
+  ```bash
+  pip install -r requirements.txt
+  ```
+
+  The streamlined `requirements.txt` only contains the packages needed to run
+  `streamlit_app.py`, keeping hosted deployments lightweight and avoiding
+  native-build failures.
+
+- **FastAPI backend and analytics services:**
+
+  ```bash
+  pip install -r backend-requirements.txt
+  ```
+
+  Install this superset when you are running the API locally or on a server.
+  It includes FastAPI, Uvicorn, scientific libraries, and Excel tooling used by
+  the underlying financial model.
 
 
 ### 4. Run the FastAPI Server
@@ -127,13 +143,15 @@ The project includes additional APIs for retrieving financial schedules (e.g., I
 ```
 financial_management_api/
 │
-├── main.py                 # FastAPI application entry point
-├── models/ecommerce.py     # FastAPI application models
-├── requirements.txt        # Python dependencies
-├── data/financial_assumptions.xlsx  # Input Excel file for data loading
-├── ecommerce_api_usage.xlsx          # Documentation of API endpoints and purposes
-├── venv/                   # Virtual environment (created after setup)
-└── README.md               # This file
+├── main.py                       # FastAPI application entry point
+├── ecommerce.py                  # Core ecommerce model implementation
+├── requirements.txt              # Streamlit dashboard dependencies
+├── backend-requirements.txt      # FastAPI/analytics dependency set
+├── frontend/                     # Static HTML/JS console assets
+├── streamlit_app.py              # Streamlit dashboard
+├── financial_assumptions.xlsx    # Input Excel file for data loading
+├── ecommerce_api_usage.xlsx      # Documentation of API endpoints and purposes
+└── README.md                     # This file
 ```
 
 ## API Usage Notes
@@ -147,6 +165,10 @@ financial_management_api/
 
 - **Port Conflict**: If port 8002 is in use, change the port in the Uvicorn command (e.g., `--port 8003`).
 - **Missing Dependencies**: Ensure all packages in `requirements.txt` are installed. Run `pip install -r requirements.txt` again if errors occur.
+- **Streamlit Cloud install failures**: The hosted environment only needs the
+  lightweight `requirements.txt`. If you deploy the backend elsewhere, install
+  `backend-requirements.txt` outside of Streamlit Cloud to avoid native build
+  steps that the platform blocks.
 - **File Not Found**: Verify `financial_assumptions.xlsx` exists in the project root or update the filename/path in the load API call.
 - **API Errors**: Check server logs (enabled with `--log-level debug`) for detailed error messages.
 
