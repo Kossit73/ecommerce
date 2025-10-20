@@ -17,6 +17,8 @@ import logging
 from typing import Dict, List, Any
 import os
 import math
+from pathlib import Path
+import shutil
 from fastapi import HTTPException
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from functools import wraps
@@ -26,7 +28,15 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from xlsxwriter.exceptions import DuplicateWorksheetName
 
-EXCEL_FILE = "data/financial_assumptions.xlsx"
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+DEFAULT_FILENAME = "financial_assumptions.xlsx"
+DATA_DIR.mkdir(exist_ok=True)
+EXCEL_FILE = DATA_DIR / DEFAULT_FILENAME
+
+root_excel = BASE_DIR / DEFAULT_FILENAME
+if root_excel.exists() and not EXCEL_FILE.exists():
+    shutil.copy(root_excel, EXCEL_FILE)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
