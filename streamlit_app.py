@@ -1162,4 +1162,10 @@ if __name__ == "__main__":
         from streamlit.web import bootstrap
 
         script_path = Path(__file__).resolve()
-        bootstrap.run(str(script_path), "", [], flag_options={})
+        try:
+            bootstrap.run(str(script_path), "", [], flag_options={})
+        except RuntimeError as exc:  # pragma: no cover - defensive guard for hosted runners
+            if "Runtime instance already exists" in str(exc):
+                main()
+            else:
+                raise
