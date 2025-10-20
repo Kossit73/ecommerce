@@ -244,8 +244,8 @@ const state = {
 };
 
 function init() {
+  initializeApiBase();
   wireNavigation();
-  wireApiBaseInput();
   wireInputPage();
   wireMetricsPage();
   wirePerformancePage();
@@ -254,10 +254,6 @@ function init() {
   wireAdvancedPage();
   renderScenarioParameters();
   renderScenarioResult(state.scenarioResult);
-  setApiBase(qs('#api-base').value || window.localStorage.getItem('ecom-api-base') || '');
-  if (getApiBase()) {
-    qs('#api-base').value = getApiBase();
-  }
   loadScenarioDefaults(state.scenario.type, { silent: true }).catch(() => {});
   refreshWorkbook('Load Existing').catch(() => {});
   loadKeyMetrics().catch(() => {});
@@ -288,14 +284,40 @@ function wireNavigation() {
   });
 }
 
-function wireApiBaseInput() {
-  const applyBtn = qs('#apply-api-base');
-  const input = qs('#api-base');
-  applyBtn.addEventListener('click', () => {
-    setApiBase(input.value.trim());
+function initializeApiBase() {
+  const params = new URLSearchParams(window.location.search);
+  const override = params.get('apiBase') || params.get('api_base');
+  const stored = window.localStorage.getItem('ecom-api-base');
+  const globalBase = window.ECOM_API_BASE;
+
+  if (override) {
+    setApiBase(override.trim());
     window.localStorage.setItem('ecom-api-base', getApiBase());
-    toast(`API base set to ${getApiBase() || 'relative path'}`);
-  });
+    toast(`API base set from query: ${getApiBase()}`);
+    return;
+  }
+
+  if (globalBase) {
+    setApiBase(String(globalBase).trim());
+    return;
+  }
+
+  if (stored) {
+    setApiBase(stored);
+    return;
+  }
+
+  if (window.location.origin && window.location.origin.startsWith('http')) {
+    const { hostname, port } = window.location;
+    if ((hostname === 'localhost' || hostname === '127.0.0.1') && port && port !== '8000') {
+      setApiBase('http://localhost:8000');
+      return;
+    }
+    setApiBase(window.location.origin);
+    return;
+  }
+
+  setApiBase('http://localhost:8000');
 }
 
 function wireInputPage() {

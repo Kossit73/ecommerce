@@ -17,7 +17,7 @@ All assets are plain text, so no Node.js build or `react-scripts` runtime is req
    python -m http.server 3000 --directory frontend
    ```
 
-3. Visit `http://localhost:3000/index.html`. Set the API base URL in the top-right corner to `http://localhost:8000` and click **Apply**.
+3. Visit `http://localhost:3000/index.html?apiBase=http://localhost:8000`. The query parameter configures the FastAPI base URL and the value is persisted in `localStorage` for subsequent visits.
 
 The console will now drive data ingestion, scenario management, visualization, reporting, and advanced analytics through the FastAPI endpoints. No package installation steps are necessary.
 
@@ -35,4 +35,4 @@ The console will now drive data ingestion, scenario management, visualization, r
 
 The frontend JavaScript lives in `assets/js/`. `app.js` wires UI events to the API, `tables.js` renders grid views, and `charts.js` wraps Plotly visualizations. Styles reside in `assets/css/styles.css`.
 
-Because everything is static, adjustments only require refreshing the browser—no build step is involved.
+Because everything is static, adjustments only require refreshing the browser—no build step is involved. To hard-code a backend target, set `window.ECOM_API_BASE` in `index.html` before `assets/js/app.js` is loaded.

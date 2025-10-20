@@ -69,12 +69,12 @@ console or the Streamlit app.
    python -m http.server 3000 --directory frontend
    ```
 
-3. Visit `http://localhost:3000/index.html`, set the **API Base URL** at the
-   top-right of the page to `http://localhost:8002`, and click **Apply**. The
-   browser console now provides the Input & Assumptions, Key Financial Metrics,
-   Financial Performance, Financial Position, Cash Flow Statement, Sensitivity
-   Analysis, and Advanced Analysis workflows showcased in the screenshot
-   below.
+3. Visit `http://localhost:3000/index.html?apiBase=http://localhost:8002`. The
+   `apiBase` query parameter configures the backend target and is saved to
+   `localStorage` for future visits. The browser console now provides the Input
+   & Assumptions, Key Financial Metrics, Financial Performance, Financial
+   Position, Cash Flow Statement, Sensitivity Analysis, and Advanced Analysis
+   workflows showcased in the screenshot below.
 
 #### Option B: Streamlit console
 
