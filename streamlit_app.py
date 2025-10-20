@@ -36,6 +36,8 @@ def _normalize_years_data(years_data: Dict[int, Dict]) -> pd.DataFrame:
 
     df = pd.DataFrame.from_dict(years_data, orient="index")
     df.index.name = "Year"
+    if "Year" in df.columns:
+        df = df.drop(columns=["Year"])
     return df.reset_index()
 
 
