@@ -115,7 +115,9 @@ console or the Streamlit app.
 
 4. Each assumption schedule now includes inline “Add line”/“Remove line”
    controls, so you can insert or delete rows directly inside Streamlit before
-   saving the rebuilt workbook inputs.
+   saving the rebuilt workbook inputs. A guidance panel inside every schedule
+   outlines the best way to edit each line item so you know which fields to
+   tweak when assumptions change.
 
 ## Important Note
 

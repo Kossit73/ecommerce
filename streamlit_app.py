@@ -329,6 +329,85 @@ ASSUMPTION_SCHEDULES: List[Dict[str, Any]] = [
 ]
 
 
+ASSUMPTION_SCHEDULE_TIPS: Dict[str, List[str]] = {
+    "Demand & Conversion": [
+        "Update channel traffic volumes to match your marketing plan; lower numbers reflect tighter budgets while higher values signal expansion.",
+        "Tune each conversion rate to represent expected landing-page or campaign performance—use the Add line control when you need duplicate years for A/B assumptions.",
+        "Adjust the churn rate when retention programs change; removing a line lets you discard outdated historical scenarios.",
+    ],
+    "Pricing & Order Economics": [
+        "Set Average Item Value and Items per Order from your merchandising plan; edit values directly in the grid to reflect updated pricing tests.",
+        "Use Average Markdown and Promotion/Discount to capture seasonal campaigns; insert rows for new year-specific promo calendars.",
+        "COGS Percentage should reflect anticipated supplier terms—remove a row if that year no longer applies to the forecast horizon.",
+    ],
+    "Acquisition Costs": [
+        "Enter the per-click spend for each channel as negotiated with marketing vendors.",
+        "Add a row to stage alternative cost outlooks for the same year (e.g., optimistic vs. conservative).",
+        "Drop a row when the channel plan is retired so calculations no longer use stale assumptions.",
+    ],
+    "Fulfillment & Operating Costs": [
+        "Update freight, labor, and rent line items to mirror logistics contracts or staffing plans.",
+        "Adjust the Interest and Tax Rate fields when capital structure or jurisdiction changes occur.",
+        "Use Add/Remove line buttons to separate special projects (like temporary warehouses) from base operations.",
+    ],
+    "Staffing Levels": [
+        "Edit the direct, indirect, and part-time staffing counts and hours to align with workforce planning.",
+        "Set hourly rates or total costs when compensation benchmarks change; ensure totals reconcile with payroll guidance.",
+        "Insert extra rows to capture alternate hiring scenarios for the same year, then prune outdated entries with Remove line.",
+    ],
+    "Executive Compensation": [
+        "Revise each executive salary when contract renewals occur; the schedule supports multiple years of adjustments.",
+        "Add a line to reflect overlapping leadership transitions where two executives share a year.",
+        "Remove rows for vacant positions so the forecast excludes unneeded salary expense.",
+    ],
+    "Employee Benefits": [
+        "Populate per-staff and total cost fields based on benefits provider quotes.",
+        "Add rows to reflect plan changes that apply mid-year or to separate cohorts (e.g., hourly vs. salaried).",
+        "Delete rows when benefit programs are sunset to keep totals clean.",
+    ],
+    "Overheads & Fees": [
+        "Update salaries and rent categories to reflect general and administrative plans.",
+        "Modify Professional Fees and Types when advisory engagements start or end.",
+        "Use Add line to introduce new fee categories tied to future projects, and Remove line once they conclude.",
+    ],
+    "Working Capital": [
+        "Adjust Accounts Receivable Days to match credit terms—lowering the figure speeds up cash collection.",
+        "Inventory Days should reflect turnover targets; add a line to represent alternative sourcing assumptions for the same year.",
+        "Set Accounts Payable Days to negotiated supplier terms and remove rows once legacy agreements expire.",
+    ],
+    "Capital Investments": [
+        "Enter capex for technology and office equipment directly in the table when budgeting new projects.",
+        "Update depreciation years to model policy changes; separate overlapping initiatives by inserting additional rows.",
+        "Remove obsolete investment lines to avoid carrying forward cancelled projects.",
+    ],
+    "Financing Activities": [
+        "Set interest rates, equity raises, and dividend payouts according to your capital plan.",
+        "Add rows for bridge rounds or debt tranches that occur within the same fiscal year.",
+        "Remove financing rows when a transaction is deferred to keep projections realistic.",
+    ],
+    "Property Portfolio": [
+        "Update square meters and cost per SQM for each warehouse as leases change or expansions occur.",
+        "Insert lines to capture overlapping facilities or temporary space requirements.",
+        "Remove warehouse rows after consolidation to keep rent forecasts current.",
+    ],
+    "Legal & Compliance": [
+        "Edit legal cost buckets to reflect regulatory filings or casework expected in that year.",
+        "Add lines when multiple legal initiatives share a single fiscal period for more granular tracking.",
+        "Remove stale line items once matters close to avoid double-counting spend.",
+    ],
+    "Asset Register": [
+        "Update asset names, amounts, and depreciation rates as fixed assets are acquired or revalued.",
+        "Add rows for each new asset class introduced during the forecast period.",
+        "Remove assets once they are disposed or fully depreciated to keep the register accurate.",
+    ],
+    "Debt Schedule": [
+        "Edit debt names, balances, and interest rates to align with current facility agreements.",
+        "Insert lines for additional borrowings or refinancing that occur mid-year.",
+        "Remove loans once they are repaid so amortization schedules no longer include them.",
+    ],
+}
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -965,6 +1044,10 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
         for schedule, schedule_tab in zip(ASSUMPTION_SCHEDULES, schedule_tabs):
             with schedule_tab:
                 st.caption(schedule["description"])
+                tips = ASSUMPTION_SCHEDULE_TIPS.get(schedule["name"])
+                if tips:
+                    tip_lines = "\n".join(f"- {tip}" for tip in tips)
+                    st.info(f"**How to edit line items**\n{tip_lines}")
                 frame = tables.get(schedule["name"])
                 if frame is None:
                     frame = create_blank_schedule(schedule["columns"], current_years)
