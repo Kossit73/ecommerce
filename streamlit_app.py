@@ -5,7 +5,7 @@ import base64
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -379,15 +379,29 @@ def create_blank_schedule(columns: Iterable[str], years: Iterable[int]) -> pd.Da
     return frame[[col for col in columns if col in frame.columns]]
 
 
+def collect_all_years(tables: Dict[str, pd.DataFrame]) -> List[int]:
+    observed: Set[int] = set()
+    for frame in tables.values():
+        if frame is None or not isinstance(frame, pd.DataFrame):
+            continue
+        if "Year" not in frame.columns:
+            continue
+        observed.update(_normalize_year_list(frame["Year"].tolist()))
+    return sorted(observed)
+
+
 def ensure_assumption_tables() -> None:
     if "assumption_tables" not in st.session_state:
         st.session_state["assumption_years"] = DEFAULT_ASSUMPTION_YEARS.copy()
-        st.session_state["assumption_tables"] = {
+        initial_tables = {
             schedule["name"]: create_blank_schedule(
                 schedule["columns"], st.session_state["assumption_years"]
             )
             for schedule in ASSUMPTION_SCHEDULES
         }
+        st.session_state["assumption_tables"] = sync_schedule_years(
+            st.session_state["assumption_years"], initial_tables
+        )
 
 
 def get_assumption_years() -> List[int]:
@@ -406,15 +420,34 @@ def get_assumption_years() -> List[int]:
 
 
 def add_assumption_year(year: int) -> None:
-    updated_years = sorted({*get_assumption_years(), year})
-    st.session_state["assumption_years"] = updated_years
+    current_years = _normalize_year_list(get_assumption_years())
+    if year not in current_years:
+        current_years.append(year)
     tables: Dict[str, pd.DataFrame] = st.session_state.get("assumption_tables", {})
-    st.session_state["assumption_tables"] = sync_schedule_years(updated_years, tables)
+    updated_tables: Dict[str, pd.DataFrame] = {}
+    for schedule in ASSUMPTION_SCHEDULES:
+        frame = tables.get(schedule["name"])
+        columns = schedule["columns"]
+        new_row = {column: None for column in columns}
+        if "Year" in new_row:
+            new_row["Year"] = year
+        if frame is None or frame.empty:
+            updated_tables[schedule["name"]] = pd.DataFrame([new_row], columns=columns)
+            continue
+        working = frame.copy()
+        if "Year" not in working.columns:
+            working.insert(0, "Year", [None] * len(working))
+        working["Year"] = pd.to_numeric(working["Year"], errors="coerce")
+        existing_years = _normalize_year_list(working["Year"].tolist())
+        if year not in existing_years:
+            working = pd.concat([working, pd.DataFrame([new_row])], ignore_index=True)
+        updated_tables[schedule["name"]] = working
+    st.session_state["assumption_tables"] = sync_schedule_years(
+        sorted(set(current_years)), updated_tables
+    )
 
 
 def remove_assumption_year(year: int) -> None:
-    current_years = [value for value in get_assumption_years() if value != year]
-    st.session_state["assumption_years"] = current_years
     tables: Dict[str, pd.DataFrame] = st.session_state.get("assumption_tables", {})
     cleaned: Dict[str, pd.DataFrame] = {}
     for schedule in ASSUMPTION_SCHEDULES:
@@ -427,16 +460,18 @@ def remove_assumption_year(year: int) -> None:
             frame["Year"] = pd.to_numeric(frame["Year"], errors="coerce")
             frame = frame[frame["Year"] != year]
         cleaned[schedule["name"]] = frame
-    st.session_state["assumption_tables"] = sync_schedule_years(current_years, cleaned)
+    remaining_years = [value for value in collect_all_years(cleaned) if value != year]
+    st.session_state["assumption_tables"] = sync_schedule_years(remaining_years, cleaned)
 
 
 def reset_assumption_tables(years: Optional[Iterable[int]] = None) -> None:
     base_years = _normalize_year_list(years or DEFAULT_ASSUMPTION_YEARS)
     st.session_state["assumption_years"] = base_years
-    st.session_state["assumption_tables"] = {
+    fresh_tables = {
         schedule["name"]: create_blank_schedule(schedule["columns"], base_years)
         for schedule in ASSUMPTION_SCHEDULES
     }
+    st.session_state["assumption_tables"] = sync_schedule_years(base_years, fresh_tables)
     st.session_state["assumptions_raw"] = []
 
 
@@ -492,41 +527,37 @@ def set_assumptions_data(rows: List[Dict[str, Any]]) -> None:
         years = DEFAULT_ASSUMPTION_YEARS.copy()
     st.session_state["assumptions_raw"] = rows
     st.session_state["assumption_years"] = years
-    st.session_state["assumption_tables"] = split_assumptions_into_tables(df, years)
+    tables = split_assumptions_into_tables(df, years)
+    st.session_state["assumption_tables"] = sync_schedule_years(years, tables)
 
 
-def sync_schedule_years(base_years: List[int], tables: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+def sync_schedule_years(
+    base_years: List[int], tables: Dict[str, pd.DataFrame]
+) -> Dict[str, pd.DataFrame]:
     normalized_years = _normalize_year_list(base_years)
+    observed: Set[int] = set(normalized_years)
     synced: Dict[str, pd.DataFrame] = {}
     for schedule in ASSUMPTION_SCHEDULES:
+        columns = schedule["columns"]
         frame = tables.get(schedule["name"])
-        if not normalized_years:
-            synced[schedule["name"]] = create_blank_schedule(schedule["columns"], [])
-            continue
-        if frame is None or frame.empty:
-            frame = create_blank_schedule(schedule["columns"], normalized_years)
+        if frame is None:
+            frame = create_blank_schedule(columns, normalized_years)
         else:
             frame = frame.copy()
-            if "Year" not in frame.columns:
+            if "Year" in frame.columns:
+                frame["Year"] = pd.to_numeric(frame["Year"], errors="coerce")
+                observed.update(_normalize_year_list(frame["Year"].tolist()))
+            else:
                 frame.insert(0, "Year", [None] * len(frame))
-            frame["Year"] = pd.to_numeric(frame["Year"], errors="coerce")
-            frame = frame[frame["Year"].isin(normalized_years) | frame["Year"].isna()]
-            existing_years = _normalize_year_list(frame["Year"].tolist())
-            missing_years = [year for year in normalized_years if year not in existing_years]
-            if missing_years:
-                new_rows = pd.DataFrame(
-                    [
-                        {**{column: None for column in schedule["columns"]}, "Year": year}
-                        for year in missing_years
-                    ]
-                )
-                frame = pd.concat([frame, new_rows], ignore_index=True)
-        for column in schedule["columns"]:
-            if column not in frame.columns:
-                frame[column] = None
-        frame = frame[schedule["columns"]]
-        frame = frame.sort_values("Year", na_position="last").reset_index(drop=True)
-        synced[schedule["name"]] = frame
+            for column in columns:
+                if column not in frame.columns:
+                    frame[column] = None
+            frame = frame[columns]
+        synced[schedule["name"]] = frame.reset_index(drop=True)
+    final_years = sorted(year for year in observed if year is not None)
+    if not final_years:
+        final_years = normalized_years or DEFAULT_ASSUMPTION_YEARS.copy()
+    st.session_state["assumption_years"] = final_years
     return synced
 
 
@@ -942,32 +973,104 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                     "Year",
                     step=1,
                     format="%d",
-                    disabled=not schedule.get("editable_year", False),
+                    disabled=False,
                 )
                 editor_key = "assumptions_" + "".join(
                     char.lower() if char.isalnum() else "_" for char in schedule["name"]
                 )
                 updated = st.data_editor(
                     frame,
-                    num_rows="dynamic" if schedule.get("editable_year", False) else "fixed",
+                    num_rows="dynamic",
                     use_container_width=True,
                     key=editor_key,
                     column_config=column_config,
                 )
+                with st.expander("Line item controls", expanded=False):
+                    insert_col, remove_col = st.columns(2)
+                    with insert_col:
+                        insert_position = st.number_input(
+                            "Insert at row",
+                            min_value=0,
+                            max_value=len(updated),
+                            value=len(updated),
+                            step=1,
+                            key=f"{editor_key}_insert_position",
+                        )
+                        if "Year" in updated.columns:
+                            existing_years = _normalize_year_list(
+                                pd.to_numeric(updated["Year"], errors="coerce").tolist()
+                            )
+                            if existing_years:
+                                suggested_year = existing_years[-1] + 1
+                            elif current_years:
+                                suggested_year = current_years[0]
+                            else:
+                                suggested_year = 2023
+                            new_row_year = st.number_input(
+                                "Year for new row",
+                                value=int(suggested_year),
+                                step=1,
+                                key=f"{editor_key}_new_row_year",
+                            )
+                        else:
+                            new_row_year = None
+                        if st.button(
+                            "Add line",
+                            key=f"{editor_key}_add_line",
+                            use_container_width=True,
+                        ):
+                            new_row = {column: None for column in schedule["columns"]}
+                            if "Year" in new_row and new_row_year is not None:
+                                new_row["Year"] = int(new_row_year)
+                            top = updated.iloc[: insert_position]
+                            bottom = updated.iloc[insert_position:]
+                            updated = pd.concat(
+                                [top, pd.DataFrame([new_row]), bottom], ignore_index=True
+                            )
+                    with remove_col:
+                        if not updated.empty:
+                            remove_options = list(range(len(updated)))
+                            remove_labels: List[str] = []
+                            for idx, (_, row) in enumerate(updated.iterrows()):
+                                year_value = row.get("Year")
+                                if pd.notna(year_value):
+                                    remove_labels.append(f"Row {idx + 1} – Year {int(year_value)}")
+                                else:
+                                    remove_labels.append(f"Row {idx + 1} – (no year)")
+                            remove_choice = st.selectbox(
+                                "Row to remove",
+                                remove_options,
+                                format_func=lambda idx: remove_labels[idx],
+                                key=f"{editor_key}_remove_choice",
+                            )
+                            if st.button(
+                                "Remove line",
+                                key=f"{editor_key}_remove_line",
+                                use_container_width=True,
+                            ):
+                                updated = updated.drop(index=remove_choice).reset_index(drop=True)
+                        else:
+                            st.selectbox(
+                                "Row to remove",
+                                ["No rows available"],
+                                disabled=True,
+                                key=f"{editor_key}_remove_disabled",
+                            )
+                            st.button(
+                                "Remove line",
+                                key=f"{editor_key}_remove_btn_disabled",
+                                disabled=True,
+                                use_container_width=True,
+                            )
                 updated_tables[schedule["name"]] = updated
 
-        editable_schedule = next(
-            (schedule for schedule in ASSUMPTION_SCHEDULES if schedule.get("editable_year")),
-            None,
+        combined_years = collect_all_years(updated_tables)
+        base_years = (
+            combined_years
+            if combined_years
+            else (st.session_state.get("assumption_years") or current_years)
         )
-        if editable_schedule:
-            base_table = updated_tables.get(editable_schedule["name"])
-            base_years = _normalize_year_list(base_table["Year"].tolist()) if base_table is not None else []
-            if base_years:
-                st.session_state["assumption_years"] = base_years
-        st.session_state["assumption_tables"] = sync_schedule_years(
-            st.session_state.get("assumption_years", current_years), updated_tables
-        )
+        st.session_state["assumption_tables"] = sync_schedule_years(base_years, updated_tables)
 
         if st.button("Save assumptions", type="primary"):
             combined_df = combine_assumption_tables(st.session_state["assumption_tables"])

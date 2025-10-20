@@ -113,6 +113,10 @@ console or the Streamlit app.
    `ECOMMERCE_API_BASE` environment variable before launching Streamlit if your
    backend is not running on the default `http://localhost:8000`.
 
+4. Each assumption schedule now includes inline “Add line”/“Remove line”
+   controls, so you can insert or delete rows directly inside Streamlit before
+   saving the rebuilt workbook inputs.
+
 ## Important Note
 
 The APIs for retrieving financial schedules and running analysis depend on data loaded into the backend. You **must** first call the `/api/ecommerce/file_action?action=Load%20Existing` API to load the financial data from `financial_assumptions.xlsx` before other APIs can function correctly.
