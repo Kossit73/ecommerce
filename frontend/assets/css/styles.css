@@ -66,35 +66,38 @@ body {
 
 main {
   flex: 1;
-  display: grid;
-  grid-template-columns: 280px 1fr;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
   min-height: 0;
 }
 
-.sidebar {
+.tab-bar {
   background: var(--bg-panel);
-  border-right: 1px solid var(--border);
-  padding: 1.25rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 0.75rem;
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: 0.5rem;
   position: sticky;
   top: calc(1.5rem + 64px);
-  height: calc(100vh - 1.5rem - 64px);
-  overflow-y: auto;
+  z-index: 2;
+  overflow-x: auto;
 }
 
 .nav-link {
   background: transparent;
   border: none;
-  text-align: left;
-  padding: 0.75rem 1rem;
+  text-align: center;
+  padding: 0.6rem 1rem;
   border-radius: 0.75rem;
   font-weight: 600;
   font-size: 0.95rem;
   color: var(--muted);
   cursor: pointer;
   transition: background 0.2s ease, color 0.2s ease;
+  flex: 1 1 160px;
 }
 
 .nav-link:hover,
@@ -423,21 +426,12 @@ td[contenteditable="true"] {
 }
 
 @media (max-width: 1100px) {
-  main {
-    grid-template-columns: 1fr;
-  }
-
-  .sidebar {
+  .tab-bar {
     position: static;
-    flex-direction: row;
-    flex-wrap: wrap;
-    height: auto;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
   }
 
   .nav-link {
-    flex: 1 1 45%;
+    flex: 1 1 calc(50% - 0.5rem);
   }
 }
 
