@@ -14,6 +14,7 @@ import logging
 import numpy as np
 from io import BytesIO
 from pathlib import Path
+import shutil
 from pydantic import BaseModel, field_validator
 from enum import Enum
 from starlette.concurrency import run_in_threadpool
@@ -23,8 +24,26 @@ app = FastAPI(title="Industry Financial Models")
 templates = Jinja2Templates(directory="templates")
 
 # Directory to store Excel files
-DATA_DIR = Path("./data")
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+DEFAULT_FILENAME = "financial_assumptions.xlsx"
 DATA_DIR.mkdir(exist_ok=True)
+
+
+def ensure_data_file(filename: str = DEFAULT_FILENAME) -> Path:
+    """Return the path to the persisted Excel file, copying the default
+    workbook from the project root into the data directory if needed."""
+
+    data_path = DATA_DIR / filename
+    if data_path.exists():
+        return data_path
+
+    root_path = BASE_DIR / filename
+    if root_path.exists():
+        shutil.copy(root_path, data_path)
+        return data_path
+
+    return data_path
 
 # In-memory storage (replace with database in production)
 session_state = {
@@ -690,8 +709,8 @@ async def get_current_user(request: Request):
     return request.session["username"]
 
 async def create_new_file():
-    filename="financial_assumptions.xlsx"
-    
+    filename = DEFAULT_FILENAME
+
     file_path = DATA_DIR / filename
     if file_path.exists():
         raise HTTPException(status_code=400, detail=f"File {filename} already exists")
@@ -707,8 +726,8 @@ async def create_new_file():
 # POST /upload-file: Upload and read an Excel file
 @app.post("/upload_file")
 async def upload_file(file: UploadFile = File(...)):
-    filename = "financial_assumptions.xlsx"
-    file_path = DATA_DIR / filename    
+    filename = DEFAULT_FILENAME
+    file_path = DATA_DIR / filename
     try:
         # Save uploaded file
         contents = await file.read()
@@ -755,8 +774,7 @@ async def upload_file(file: UploadFile = File(...)):
 @app.get("/file_action")
 async def check_file_action(action: str = "Load Existing"):
 
-    filename="financial_assumptions.xlsx"
-    file_path = DATA_DIR / filename    
+    filename = DEFAULT_FILENAME
     if action not in ["Load Existing", "Start New", "Select File"]:
         raise HTTPException(status_code=400, detail="Invalid action")
     
@@ -769,7 +787,8 @@ async def check_file_action(action: str = "Load Existing"):
         session_state["scenarios"]=None
         session_state["forecast_df"]=None
 
-        response=await create_new_file()
+        response = await create_new_file()
+        file_path = DATA_DIR / filename
         df = pd.read_excel(file_path)
         session_state['df']=df
         data = ecommerce_model.process_excel_data(df)
@@ -777,12 +796,12 @@ async def check_file_action(action: str = "Load Existing"):
         session_state['years_data']=load_existing_data_response["data"]
         session_state['debts_data']=load_existing_data_response['debts_data']
         return response
-    
+
     if action == "Select File":
         return {"Use upload file API /ecommerce/upload_file"}
-    
+
     if filename:
-        file_path = DATA_DIR / filename
+        file_path = ensure_data_file(filename)
         if file_path.exists():
             try:
                 df = pd.read_excel(file_path)
@@ -832,8 +851,8 @@ async def save_assumptions(years_data: List[Dict[str, Any]]):
             raise HTTPException(status_code=400, detail="Every object must contain a 'Year' key.")
 
     # 2) Load existing Excel into a DataFrame (or create empty DF with correct columns if not present)
-    filename="financial_assumptions.xlsx"
-    file_path = DATA_DIR / filename
+    filename = DEFAULT_FILENAME
+    file_path = ensure_data_file(filename)
     if file_path.exists():
         try:
             df_existing = pd.read_excel(file_path)
