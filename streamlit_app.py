@@ -904,25 +904,7 @@ def render_schedule_section(title: str, schedules: Iterable[Dict[str, Any]]) -> 
 
 def configure_sidebar() -> None:
     with st.sidebar:
-        st.header("Workspace status")
-        base_url = get_api_base()
-        st.markdown(f"**API endpoint**\n\n`{base_url}`")
-        if st.button("Check backend connection"):
-            try:
-                with st.spinner("Contacting API..."):
-                    response = api_get("/file_action", params={"action": "Load Existing"})
-                st.success(f"Connected. Workbook exists: {response.get('exists', False)}")
-            except Exception as exc:  # pragma: no cover - interactive feedback
-                st.error(str(exc))
-
-        st.markdown(
-            """
-            The dashboard automatically selects the FastAPI endpoint. Override it by
-            setting the `ECOMMERCE_API_BASE` environment variable before launching the
-            app, then use the tabs to manage assumptions, recalculate scenarios,
-            review performance, and run analytics.
-            """
-        )
+        st.empty()
 
 
 # ---------------------------------------------------------------------------
