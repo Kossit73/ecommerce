@@ -945,6 +945,132 @@ def _apply_asset_depreciation(frame: pd.DataFrame) -> pd.DataFrame:
     return working
 
 
+def build_asset_schedule(
+    assets: Optional[pd.DataFrame], years: Sequence[int]
+) -> Tuple[pd.DataFrame, Dict[int, Dict[str, float]]]:
+    columns = [
+        "Year",
+        "Asset",
+        "Beginning Balance",
+        "Additions",
+        "Depreciation",
+        "Ending Balance",
+        "Rate %",
+    ]
+    if assets is None or assets.empty:
+        return pd.DataFrame(columns=columns), {}
+
+    entries: List[Dict[str, Any]] = []
+    for idx, row in assets.iterrows():
+        year_raw = row.get("Year")
+        try:
+            year = int(float(year_raw)) if year_raw is not None else None
+        except (TypeError, ValueError):
+            year = None
+        amount = to_number(row.get("Asset_1_Amount"), None)
+        rate = _normalize_rate(row.get("Asset_1_Rate")) or 0.0
+        if year is None or amount in (None, 0):
+            continue
+        name = str(row.get("Asset_1_Name") or "").strip()
+        if not name:
+            name = f"Asset {idx + 1}"
+        entries.append(
+            {
+                "name": name,
+                "start_year": year,
+                "amount": float(amount),
+                "rate": rate,
+            }
+        )
+
+    if not entries:
+        return pd.DataFrame(columns=columns), {}
+
+    label_counts: Dict[str, int] = {}
+    for entry in entries:
+        base = entry["name"]
+        label_counts[base] = label_counts.get(base, 0) + 1
+        if label_counts[base] > 1:
+            entry["label"] = f"{base} #{label_counts[base]}"
+        else:
+            entry["label"] = base
+
+    observed_years: Set[int] = {
+        int(year)
+        for year in years
+        if year is not None and not (isinstance(year, float) and pd.isna(year))
+    }
+    observed_years.update(entry["start_year"] for entry in entries)
+    sorted_years = sorted(observed_years)
+
+    asset_states: List[Dict[str, Any]] = [
+        {
+            "name": entry["name"],
+            "label": entry.get("label", entry["name"]),
+            "start_year": entry["start_year"],
+            "amount": entry["amount"],
+            "rate": entry["rate"],
+            "balance": 0.0,
+        }
+        for entry in entries
+    ]
+
+    schedule_rows: List[Dict[str, Any]] = []
+    totals: Dict[int, Dict[str, float]] = {}
+
+    for year in sorted_years:
+        year_totals = {
+            "beginning": 0.0,
+            "additions": 0.0,
+            "depreciation": 0.0,
+            "ending": 0.0,
+        }
+        active = False
+        for state in asset_states:
+            start_year = state["start_year"]
+            if year < start_year and state["balance"] <= 0:
+                continue
+            beginning = state["balance"]
+            addition = 0.0
+            if year == start_year:
+                addition = state["amount"]
+            balance_before_depr = beginning + addition
+            if balance_before_depr <= 0 and addition <= 0:
+                continue
+            rate = state["rate"]
+            depreciation = balance_before_depr * rate
+            if depreciation > balance_before_depr:
+                depreciation = balance_before_depr
+            ending = balance_before_depr - depreciation
+            state["balance"] = ending
+            schedule_rows.append(
+                {
+                    "Year": year,
+                    "Asset": state["label"],
+                    "Beginning Balance": round(beginning, 2),
+                    "Additions": round(addition, 2),
+                    "Depreciation": round(depreciation, 2),
+                    "Ending Balance": round(ending, 2),
+                    "Rate %": round(rate * 100.0, 4),
+                }
+            )
+            year_totals["beginning"] += beginning
+            year_totals["additions"] += addition
+            year_totals["depreciation"] += depreciation
+            year_totals["ending"] += ending
+            active = True
+        if active:
+            totals[year] = {
+                "beginning": round(year_totals["beginning"], 2),
+                "additions": round(year_totals["additions"], 2),
+                "depreciation": round(year_totals["depreciation"], 2),
+                "ending": round(year_totals["ending"], 2),
+            }
+
+    schedule_df = pd.DataFrame(schedule_rows, columns=columns)
+    return schedule_df, totals
+
+
 def apply_derived_assumption_values(
     tables: Dict[str, pd.DataFrame]
 ) -> Dict[str, pd.DataFrame]:
@@ -1248,6 +1374,10 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         if amort_years:
             years = sorted(set(years) | set(amort_years))
 
+    asset_schedule_df, asset_totals = build_asset_schedule(
+        sanitized.get("Asset Register"), years
+    )
+
     summary_rows: List[Dict[str, Any]] = []
     performance_rows: List[Dict[str, Any]] = []
     position_rows: List[Dict[str, Any]] = []
@@ -1267,6 +1397,7 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
 
     cumulative_cash = 0.0
     fixed_assets = 0.0
+    other_fixed_assets = 0.0
     prior_working_capital = 0.0
     retained_equity = 0.0
 
@@ -1286,6 +1417,13 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         legal = rows_for_year(sanitized["Legal & Compliance"], year)
         assets = rows_for_year(sanitized["Asset Register"], year)
         debt_activity = debt_totals.get(year, {})
+        asset_activity = asset_totals.get(
+            year,
+            {"beginning": 0.0, "additions": 0.0, "depreciation": 0.0, "ending": 0.0},
+        )
+        asset_additions = asset_activity.get("additions", 0.0) or 0.0
+        asset_depreciation = asset_activity.get("depreciation", 0.0) or 0.0
+        asset_ending_balance = asset_activity.get("ending", 0.0) or 0.0
 
         total_traffic = 0.0
         total_orders = 0.0
@@ -1351,7 +1489,8 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         overhead_salaries = sum_numeric(overheads, "Salaries, Wages & Benefits")
         office_rent = sum_numeric(overheads, "Office Rent")
         professional_fees = sum_numeric(overheads, "Professional Fees")
-        depreciation = sum_numeric(overheads, "Depreciation") + sum_numeric(assets, "Asset_1_Depreciation")
+        overhead_depreciation = sum_numeric(overheads, "Depreciation")
+        depreciation = overhead_depreciation + asset_depreciation
 
         property_cost = _sum_numeric_columns(property_df)
         legal_cost = _sum_numeric_columns(legal)
@@ -1405,8 +1544,12 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         delta_working_capital = current_working_capital - prior_working_capital
         prior_working_capital = current_working_capital
 
-        capex = sum_numeric(capital, "Technology Development") + sum_numeric(
-            capital, "Office Equipment"
+        tech_capex = sum_numeric(capital, "Technology Development")
+        equipment_capex = sum_numeric(capital, "Office Equipment")
+        other_capex = tech_capex + equipment_capex
+        capex = other_capex + asset_additions
+        other_fixed_assets = max(
+            other_fixed_assets + other_capex - overhead_depreciation, 0.0
         )
         equity_raised = sum_numeric(financing, "Equity Raised")
         dividends = sum_numeric(financing, "Dividends Paid")
@@ -1417,7 +1560,7 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         cff = equity_raised + debt_issued - dividends - schedule_principal
         net_cash_flow = cfo + cfi + cff
         cumulative_cash += net_cash_flow
-        fixed_assets = max(fixed_assets + capex - depreciation, 0.0)
+        fixed_assets = max(asset_ending_balance, 0.0) + other_fixed_assets
         retained_equity += net_income + equity_raised - dividends
 
         total_assets = cumulative_cash + receivables + inventory_value + fixed_assets
@@ -1507,8 +1650,10 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         depreciation_rows.append(
             {
                 "Year": year,
-                "Technology Development": sum_numeric(capital, "Technology Development"),
-                "Office Equipment": sum_numeric(capital, "Office Equipment"),
+                "Technology Development": tech_capex,
+                "Office Equipment": equipment_capex,
+                "Asset Additions": asset_additions,
+                "Asset Depreciation": asset_depreciation,
                 "Depreciation Expense": depreciation,
                 "Net New Capex": capex,
                 "Net Book Value": fixed_assets,
@@ -1872,6 +2017,7 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         "valuation_table": valuation_table,
         "chart_payloads": chart_payloads,
         "debt_amortization": debt_amortization_df,
+        "asset_schedule": asset_schedule_df,
         "metrics_cards": metrics_cards,
         "traffic": traffic_df,
         "profitability": profitability_df,
@@ -2677,6 +2823,7 @@ def render_metrics_tab(tab: st.delta_generator.DeltaGenerator) -> None:
 
         depreciation_matrix = results.get("depreciation_matrix", pd.DataFrame())
         equity_debt_matrix = results.get("equity_debt_matrix", pd.DataFrame())
+        asset_schedule = results.get("asset_schedule", pd.DataFrame())
         matrix_cols = st.columns(2)
         with matrix_cols[0]:
             if depreciation_matrix.empty:
@@ -2694,6 +2841,13 @@ def render_metrics_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                 st.dataframe(
                     equity_debt_matrix.set_index("Year"), use_container_width=True
                 )
+
+        if not asset_schedule.empty:
+            st.subheader("Asset schedule")
+            display_schedule = asset_schedule.copy()
+            if {"Year", "Asset"}.issubset(display_schedule.columns):
+                display_schedule = display_schedule.set_index(["Year", "Asset"])
+            st.dataframe(display_schedule, use_container_width=True)
 
         chart_payloads: Dict[str, Any] = results.get("chart_payloads", {})
 
