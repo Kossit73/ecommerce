@@ -507,6 +507,55 @@ def _parse_edit_value(column: str, text_value: str) -> Any:
     return float_value
 
 
+def _apply_incremental_fill(
+    frame: pd.DataFrame, percent_changes: Dict[str, float]
+) -> pd.DataFrame:
+    """Fill subsequent years using percentage changes from prior year values."""
+
+    if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
+        return frame
+
+    working = frame.copy()
+    if "Year" not in working.columns:
+        return working
+
+    def _sort_key(idx: int) -> Any:
+        year_value = working.iloc[idx].get("Year")
+        try:
+            return (float(year_value), idx)
+        except (TypeError, ValueError):
+            return (float("inf"), idx)
+
+    order = sorted(range(len(working)), key=_sort_key)
+    if not order:
+        return working
+
+    for pos in range(1, len(order)):
+        prev_idx = order[pos - 1]
+        idx = order[pos]
+        for column, percent in percent_changes.items():
+            if column not in working.columns:
+                continue
+            prev_value = working.at[prev_idx, column]
+            if prev_value is None or pd.isna(prev_value):
+                continue
+            try:
+                prev_numeric = float(prev_value)
+            except (TypeError, ValueError):
+                continue
+            try:
+                percent_value = float(percent or 0.0)
+            except (TypeError, ValueError):
+                percent_value = 0.0
+            new_value = prev_numeric * (1.0 + percent_value / 100.0)
+            if float(prev_numeric).is_integer() and float(new_value).is_integer():
+                working.at[idx, column] = int(round(new_value))
+            else:
+                working.at[idx, column] = round(new_value, 6)
+
+    return working
+
+
 def collect_all_years(tables: Dict[str, pd.DataFrame]) -> List[int]:
     observed: Set[int] = set()
     for frame in tables.values():
@@ -1159,6 +1208,73 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                                 disabled=True,
                                 use_container_width=True,
                             )
+
+                numeric_columns = [
+                    column for column in schedule["columns"] if column != "Year"
+                ]
+                if len(updated) >= 2 and numeric_columns:
+                    with st.expander("Yearly increment helper", expanded=False):
+                        st.caption(
+                            "Fill the first year's values, then set annual percentage changes "
+                            "to populate the remaining years automatically."
+                        )
+                        rate_inputs: Dict[str, float] = {}
+                        for column in numeric_columns:
+                            rate_inputs[column] = st.number_input(
+                                f"{column} annual change (%)",
+                                value=0.0,
+                                step=0.5,
+                                format="%.2f",
+                                key=f"{editor_key}_increment_{column}",
+                            )
+                        helper_col1, helper_col2, helper_col3 = st.columns(3)
+                        with helper_col1:
+                            if st.button(
+                                "Copy forward",
+                                key=f"{editor_key}_copy_forward",
+                                use_container_width=True,
+                            ):
+                                updated = _apply_incremental_fill(
+                                    updated,
+                                    {column: 0.0 for column in numeric_columns},
+                                )
+                                updated = _coerce_schedule_frame(
+                                    updated, schedule["columns"]
+                                )
+                                st.session_state[data_state_key] = updated.copy()
+                                st.success("Copied the first year across later years.")
+                        with helper_col2:
+                            if st.button(
+                                "Apply increases",
+                                key=f"{editor_key}_apply_increase",
+                                use_container_width=True,
+                            ):
+                                increments = {
+                                    column: abs(rate_inputs.get(column) or 0.0)
+                                    for column in numeric_columns
+                                }
+                                updated = _apply_incremental_fill(updated, increments)
+                                updated = _coerce_schedule_frame(
+                                    updated, schedule["columns"]
+                                )
+                                st.session_state[data_state_key] = updated.copy()
+                                st.success("Applied annual increases to future years.")
+                        with helper_col3:
+                            if st.button(
+                                "Apply decreases",
+                                key=f"{editor_key}_apply_decrease",
+                                use_container_width=True,
+                            ):
+                                decrements = {
+                                    column: -abs(rate_inputs.get(column) or 0.0)
+                                    for column in numeric_columns
+                                }
+                                updated = _apply_incremental_fill(updated, decrements)
+                                updated = _coerce_schedule_frame(
+                                    updated, schedule["columns"]
+                                )
+                                st.session_state[data_state_key] = updated.copy()
+                                st.success("Applied annual decreases to future years.")
 
             active_edit = st.session_state.get(edit_state_key)
             if active_edit is not None and active_edit >= len(updated):
