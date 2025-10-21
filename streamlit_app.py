@@ -954,6 +954,7 @@ def build_asset_schedule(
         "Beginning Balance",
         "Additions",
         "Depreciation",
+        "Cumulative Depreciation",
         "Ending Balance",
         "Rate %",
     ]
@@ -1011,6 +1012,7 @@ def build_asset_schedule(
             "amount": entry["amount"],
             "rate": entry["rate"],
             "balance": 0.0,
+            "cumulative": 0.0,
         }
         for entry in entries
     ]
@@ -1023,6 +1025,7 @@ def build_asset_schedule(
             "beginning": 0.0,
             "additions": 0.0,
             "depreciation": 0.0,
+            "cumulative": 0.0,
             "ending": 0.0,
         }
         active = False
@@ -1043,6 +1046,7 @@ def build_asset_schedule(
                 depreciation = balance_before_depr
             ending = balance_before_depr - depreciation
             state["balance"] = ending
+            state["cumulative"] = state.get("cumulative", 0.0) + depreciation
             schedule_rows.append(
                 {
                     "Year": year,
@@ -1050,6 +1054,7 @@ def build_asset_schedule(
                     "Beginning Balance": round(beginning, 2),
                     "Additions": round(addition, 2),
                     "Depreciation": round(depreciation, 2),
+                    "Cumulative Depreciation": round(state["cumulative"], 2),
                     "Ending Balance": round(ending, 2),
                     "Rate %": round(rate * 100.0, 4),
                 }
@@ -1060,10 +1065,19 @@ def build_asset_schedule(
             year_totals["ending"] += ending
             active = True
         if active:
+            year_totals["cumulative"] = round(
+                sum(
+                    state.get("cumulative", 0.0)
+                    for state in asset_states
+                    if year >= state.get("start_year", year)
+                ),
+                2,
+            )
             totals[year] = {
                 "beginning": round(year_totals["beginning"], 2),
                 "additions": round(year_totals["additions"], 2),
                 "depreciation": round(year_totals["depreciation"], 2),
+                "cumulative": year_totals["cumulative"],
                 "ending": round(year_totals["ending"], 2),
             }
 
@@ -1419,10 +1433,17 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         debt_activity = debt_totals.get(year, {})
         asset_activity = asset_totals.get(
             year,
-            {"beginning": 0.0, "additions": 0.0, "depreciation": 0.0, "ending": 0.0},
+            {
+                "beginning": 0.0,
+                "additions": 0.0,
+                "depreciation": 0.0,
+                "cumulative": 0.0,
+                "ending": 0.0,
+            },
         )
         asset_additions = asset_activity.get("additions", 0.0) or 0.0
         asset_depreciation = asset_activity.get("depreciation", 0.0) or 0.0
+        asset_cumulative_depr = asset_activity.get("cumulative", 0.0) or 0.0
         asset_ending_balance = asset_activity.get("ending", 0.0) or 0.0
 
         total_traffic = 0.0
@@ -1654,6 +1675,7 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
                 "Office Equipment": equipment_capex,
                 "Asset Additions": asset_additions,
                 "Asset Depreciation": asset_depreciation,
+                "Cumulative Asset Depreciation": asset_cumulative_depr,
                 "Depreciation Expense": depreciation,
                 "Net New Capex": capex,
                 "Net Book Value": fixed_assets,
