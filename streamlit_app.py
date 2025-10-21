@@ -11,6 +11,11 @@ import streamlit as st
 import numpy as np
 import math
 
+try:  # numpy removed np.irr in v2.0; prefer numpy-financial when available
+    import numpy_financial as npf
+except Exception:  # pragma: no cover - fallback when package is unavailable
+    npf = None
+
 # ---------------------------------------------------------------------------
 # Streamlit configuration & constants
 # ---------------------------------------------------------------------------
@@ -985,6 +990,29 @@ def _sum_numeric_columns(frame: pd.DataFrame) -> float:
     return total
 
 
+def _npv(rate: float, cash_flows: Sequence[float]) -> float:
+    return sum(cf / ((1 + rate) ** idx) for idx, cf in enumerate(cash_flows))
+
+
+def _irr_newton(cash_flows: Sequence[float]) -> Optional[float]:
+    rate = 0.1
+    for _ in range(100):
+        npv_value = _npv(rate, cash_flows)
+        derivative = sum(
+            -idx * cf / ((1 + rate) ** (idx + 1))
+            for idx, cf in enumerate(cash_flows)
+        )
+        if abs(derivative) < 1e-12:
+            return None
+        next_rate = rate - npv_value / derivative
+        if not np.isfinite(next_rate) or next_rate <= -0.9999:
+            return None
+        if abs(next_rate - rate) < 1e-6:
+            return max(next_rate, -0.9999)
+        rate = next_rate
+    return None
+
+
 def compute_irr_value(cash_flows: Sequence[float]) -> Optional[float]:
     valid_flows = [float(cf) for cf in cash_flows if pd.notna(cf)]
     if not valid_flows:
@@ -994,10 +1022,19 @@ def compute_irr_value(cash_flows: Sequence[float]) -> Optional[float]:
     if not (has_positive and has_negative):
         return None
     try:
-        irr = np.irr(valid_flows)
+        if npf is not None:
+            irr = npf.irr(valid_flows)
+        else:
+            irr = _irr_newton(valid_flows)
+        if isinstance(irr, np.ndarray):
+            irr = irr.item()
     except (FloatingPointError, ValueError, ZeroDivisionError):
         return None
-    if irr is None or np.isnan(irr):
+    if irr is None:
+        return None
+    if isinstance(irr, complex):
+        return None
+    if np.isnan(irr):
         return None
     return irr
 
