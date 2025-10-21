@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+import json
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -268,6 +269,10 @@ ASSUMPTION_SCHEDULES: List[Dict[str, Any]] = [
     },
 ]
 
+SCHEDULE_COLUMN_MAP: Dict[str, Sequence[str]] = {
+    schedule["name"]: schedule["columns"] for schedule in ASSUMPTION_SCHEDULES
+}
+
 
 ASSUMPTION_SCHEDULE_TIPS: Dict[str, List[str]] = {
     "Demand & Conversion": [
@@ -403,6 +408,45 @@ def _dataframes_equal(left: Any, right: Any) -> bool:
     return left is right
 
 
+def _jsonable(value: Any) -> Any:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except TypeError:
+        pass
+    if isinstance(value, (np.generic,)):
+        value = value.item()
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return None
+    if isinstance(value, (pd.Timestamp, pd.Timedelta)):
+        return value.isoformat()
+    return value
+
+
+def _table_signature_payload(name: str, frame: Any) -> List[Dict[str, Any]]:
+    columns = list(SCHEDULE_COLUMN_MAP.get(name, []))
+    if columns:
+        coerced = _coerce_schedule_frame(frame, columns)
+    elif isinstance(frame, pd.DataFrame):
+        coerced = _coerce_schedule_frame(frame, list(frame.columns))
+    else:
+        coerced = pd.DataFrame(columns=columns)
+    if coerced.empty:
+        return []
+    sanitized = coerced.applymap(_jsonable)
+    return sanitized.to_dict(orient="records")
+
+
+def _build_tables_signature(tables: Dict[str, pd.DataFrame]) -> str:
+    all_names = sorted(set(tables.keys()) | set(SCHEDULE_COLUMN_MAP.keys()))
+    payload: Dict[str, Any] = {}
+    for name in all_names:
+        payload[name] = _table_signature_payload(name, tables.get(name))
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
 def _format_edit_value(value: Any) -> str:
     if value is None or pd.isna(value):
         return ""
@@ -500,6 +544,7 @@ def ensure_assumption_tables() -> None:
         st.session_state["assumption_tables"] = sync_schedule_years(
             st.session_state["assumption_years"], initial_tables
         )
+        refresh_model_from_assumptions(st.session_state["assumption_tables"])
 
 
 def get_assumption_years() -> List[int]:
@@ -571,6 +616,8 @@ def reset_assumption_tables(years: Optional[Iterable[int]] = None) -> None:
     }
     st.session_state["assumption_tables"] = sync_schedule_years(base_years, fresh_tables)
     st.session_state["assumptions_raw"] = []
+    st.session_state.pop("model_tables_signature", None)
+    refresh_model_from_assumptions(st.session_state["assumption_tables"])
 
 
 def split_assumptions_into_tables(df: pd.DataFrame, years: Iterable[int]) -> Dict[str, pd.DataFrame]:
@@ -617,6 +664,33 @@ def combine_assumption_tables(tables: Dict[str, pd.DataFrame]) -> pd.DataFrame:
     return merged
 
 
+def refresh_model_from_assumptions(
+    tables: Dict[str, pd.DataFrame], combined_df: Optional[pd.DataFrame] = None
+) -> bool:
+    if not isinstance(tables, dict):
+        return False
+    signature = _build_tables_signature(tables)
+    existing_signature = st.session_state.get("model_tables_signature")
+    if combined_df is None:
+        combined_df = combine_assumption_tables(tables)
+    if (
+        signature == existing_signature
+        and "model_results" in st.session_state
+        and "assumptions_raw" in st.session_state
+    ):
+        return not combined_df.empty
+    if combined_df.empty:
+        st.session_state["assumptions_raw"] = []
+        st.session_state["model_results"] = {}
+        st.session_state["model_tables_signature"] = signature
+        return False
+    sanitized = combined_df.applymap(_jsonable)
+    st.session_state["assumptions_raw"] = sanitized.to_dict(orient="records")
+    st.session_state["model_results"] = compute_model_outputs(tables)
+    st.session_state["model_tables_signature"] = signature
+    return True
+
+
 def set_assumptions_data(rows: List[Dict[str, Any]]) -> None:
     df = to_dataframe(rows)
     if not df.empty and "Year" in df.columns:
@@ -627,6 +701,7 @@ def set_assumptions_data(rows: List[Dict[str, Any]]) -> None:
     st.session_state["assumption_years"] = years
     tables = split_assumptions_into_tables(df, years)
     st.session_state["assumption_tables"] = sync_schedule_years(years, tables)
+    refresh_model_from_assumptions(st.session_state["assumption_tables"])
 
 
 def _build_editor_key(name: str) -> str:
@@ -2506,16 +2581,16 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                 st.session_state[data_state_key] = (
                     computed_tables.get(schedule["name"], pd.DataFrame()).copy()
                 )
+        refresh_model_from_assumptions(st.session_state["assumption_tables"])
 
         if st.button("Apply assumptions", type="primary"):
             combined_df = combine_assumption_tables(st.session_state["assumption_tables"])
             if combined_df.empty:
                 st.warning("Add at least one forecast year before applying assumptions.")
             else:
-                st.session_state["assumptions_raw"] = combined_df.to_dict(orient="records")
                 with st.spinner("Rebuilding dashboards from manual inputs..."):
-                    st.session_state["model_results"] = compute_model_outputs(
-                        st.session_state["assumption_tables"]
+                    refresh_model_from_assumptions(
+                        st.session_state["assumption_tables"], combined_df
                     )
                 st.success("Assumptions applied. All tabs now reflect your manual inputs.")
 
