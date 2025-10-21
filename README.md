@@ -97,8 +97,7 @@ console or the Streamlit app.
 
 #### Option B: Streamlit console
 
-1. Ensure the backend is running (step 4).
-2. In a new terminal, launch Streamlit with the packaged dashboard. You can use
+1. In a new terminal, launch Streamlit with the packaged dashboard. You can use
    the standard CLI or run the script directly—both options start the same
    server:
 
@@ -108,45 +107,15 @@ console or the Streamlit app.
    python streamlit_app.py
    ```
 
-3. Your browser will open to a multi-tab experience mirroring the static web
-   console. The app auto-detects the FastAPI base; set the
-   `ECOMMERCE_API_BASE` environment variable before launching Streamlit if your
-   backend is not running on the default `http://localhost:8000`.
+2. Your browser will open to a multi-tab experience mirroring the static web
+   console. All calculations now run directly in the Streamlit session, so no
+   FastAPI backend or API base configuration is required.
 
-4. Each assumption schedule now includes inline “Add line”/“Remove line”
+3. Each assumption schedule now includes inline “Add line”/“Remove line”
    controls, so you can insert or delete rows directly inside Streamlit before
    saving the rebuilt workbook inputs. A guidance panel inside every schedule
    outlines the best way to edit each line item so you know which fields to
    tweak when assumptions change.
-
-## Important Note
-
-The APIs for retrieving financial schedules and running analysis depend on data loaded into the backend. You **must** first call the `/api/ecommerce/file_action?action=Load%20Existing` API to load the financial data from `financial_assumptions.xlsx` before other APIs can function correctly.
-
-## API Endpoints
-
-### 1. Load Data (`GET /api/ecommerce/file_action?action=Load%20Existing`)
-
-Loads financial data from an Excel file into the backend. This API must be called first to populate `filtered_df` and `debt_schedules`.
-
-- **Method**: GET
-- **Path**: `/api/ecommerce/file_action?action=Load%20Existing`
-- **Path Parameter**:
-  - `filename`: Name of the Excel file (e.g., `financial_assumptions.xlsx`).
-- **Response**: JSON object confirming successful data loading or error details.
-- **Example Request**:
-  ```bash
-  curl -X 'GET' \
-  'http://127.0.0.1:8001/api/ecommerce/file_action?action=Load%20Existing' \
-  -H 'accept: application/json'
-  ```
-
-- **Purpose**: Initializes the backend with financial data required for other APIs.
-
-### 3. Other APIs
-
-The project includes additional APIs for retrieving financial schedules (e.g., Income Statement, Customer Metrics). These APIs depend on the data loaded via `/api/ecommerce/file_action?action=Load%20Existing`. For a complete list of APIs and their purposes, refer to the attached Excel file (`ecommerce_api_usage.xlsx`), which details each API, its endpoint, method, and usage.
-
 ## Project Structure
 
 ```
@@ -163,12 +132,11 @@ financial_management_api/
 └── README.md                     # This file
 ```
 
-## API Usage Notes
+## Model computation notes
 
-- **Data Dependency**: Always call `/api/ecommerce/file_action?action=Load%20Existing` first to load the financial data. Other APIs
-- **Excel File**: Ensure `financial_assumptions.xlsx` is in the project root or specify the correct path in the load API.
-- **Authentication**: The APIs are currently public. To add authentication, implement OAuth2 or JWT and add `Depends(get_current_user)` to endpoints (see previous examples).
-- **Error Handling**: APIs return HTTP 500 for processing errors and HTTP 400 for invalid inputs. Check error messages for debugging.
+- The Streamlit experience now runs entirely on the schedules you input—apply assumptions and every tab refreshes without relying on the FastAPI backend.
+- The static HTML console still supports calling the API if you host it, but it also seeds the same bundled assumption template so you can experiment offline.
+- If you plan to extend the backend, keep `backend-requirements.txt` handy for local development; Streamlit deployments only need the lightweight `requirements.txt` bundle.
 
 ## Troubleshooting
 

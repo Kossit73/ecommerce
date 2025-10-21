@@ -1,15 +1,11 @@
-"""Streamlit dashboard for the ecommerce financial model API."""
+"""Streamlit dashboard for manual ecommerce financial modeling."""
 from __future__ import annotations
-
-import base64
 import os
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
 import pandas as pd
 import plotly.graph_objects as go
-import requests
 import streamlit as st
 
 # ---------------------------------------------------------------------------
@@ -18,100 +14,35 @@ import streamlit as st
 
 st.set_page_config(page_title="Ecommerce Financial Model", layout="wide", page_icon="💼")
 
-DEFAULT_API_BASE = "http://localhost:8000"
-API_BASE_ENV_VARS = ("ECOMMERCE_API_BASE", "ECOM_API_BASE", "API_BASE_URL")
-SCENARIO_TYPES = ["Base Case", "Best Case", "Worst Case"]
-SCENARIO_DEFAULTS = {
-    "Base Case": {
-        "conversion_rate_mult": 1.0,
-        "aov_mult": 1.0,
-        "cogs_mult": 1.0,
-        "interest_mult": 1.0,
-        "labor_mult": 1.0,
-        "material_mult": 1.0,
-        "markdown_mult": 1.0,
-        "political_risk": 0.0,
-        "env_impact": 0.0,
+DEFAULT_TAX_RATE = 0.25
+DEFAULT_DISCOUNT_RATE = 0.10
+CHANNEL_DEFINITIONS = [
+    {
+        "label": "Email",
+        "traffic": "Email Traffic",
+        "conversion": "Email Conversion Rate",
+        "cpc": "Email Cost per Click",
     },
-    "Best Case": {
-        "conversion_rate_mult": 1.2,
-        "aov_mult": 1.1,
-        "cogs_mult": 0.95,
-        "interest_mult": 0.9,
-        "labor_mult": 0.9,
-        "material_mult": 0.9,
-        "markdown_mult": 0.9,
-        "political_risk": 2.0,
-        "env_impact": 2.0,
+    {
+        "label": "Organic Search",
+        "traffic": "Organic Search Traffic",
+        "conversion": "Organic Search Conversion Rate",
+        "cpc": "Organic Search Cost per Click",
     },
-    "Worst Case": {
-        "conversion_rate_mult": 0.8,
-        "aov_mult": 0.9,
-        "cogs_mult": 1.05,
-        "interest_mult": 1.2,
-        "labor_mult": 1.2,
-        "material_mult": 1.2,
-        "markdown_mult": 1.1,
-        "political_risk": 4.0,
-        "env_impact": 4.0,
+    {
+        "label": "Paid Search",
+        "traffic": "Paid Search Traffic",
+        "conversion": "Paid Search Conversion Rate",
+        "cpc": "Paid Search Cost per Click",
     },
-}
-SCENARIO_PARAM_LABELS = {
-    "conversion_rate_mult": "Conversion rate multiplier",
-    "aov_mult": "Average order value multiplier",
-    "cogs_mult": "COGS multiplier",
-    "interest_mult": "Interest multiplier",
-    "labor_mult": "Labor multiplier",
-    "material_mult": "Material multiplier",
-    "markdown_mult": "Markdown multiplier",
-    "political_risk": "Political risk score",
-    "env_impact": "Environmental impact score",
-}
-WHAT_IF_VARIABLES = [
-    "Total Orders",
-    "Average Item Value",
-    "Email Conversion Rate",
-    "Paid Search Traffic",
-    "COGS Percentage",
-    "Labor/Handling per Order",
-    "Freight/Shipping per Order",
-    "Marketing Expenses",
-    "Interest Rate",
+    {
+        "label": "Affiliates",
+        "traffic": "Affiliates Traffic",
+        "conversion": "Affiliates Conversion Rate",
+        "cpc": "Affiliates Cost per Click",
+    },
 ]
-GOAL_SEEK_VARIABLES = [
-    "Net Revenue",
-    "Total Orders",
-    "Average Item Value",
-    "Paid Search Traffic",
-    "COGS Percentage",
-    "Labor/Handling per Order",
-    "Freight/Shipping per Order",
-    "Marketing Expenses",
-]
-SENSITIVITY_VARIABLES = [
-    "Average Item Value",
-    "COGS Percentage",
-    "Email Traffic",
-    "Paid Search Traffic",
-    "Email Conversion Rate",
-    "Organic Search Conversion Rate",
-    "Paid Search Conversion Rate",
-    "Affiliates Conversion Rate",
-]
-BUDGET_LINES = [
-    "Total Marketing Budget",
-    "Freight/Shipping per Order",
-    "Labor/Handling per Order",
-    "General Warehouse Rent",
-    "Office Rent",
-    "Salaries, Wages & Benefits",
-    "Professional Fees",
-]
-SCHEDULE_OPTIONS = {
-    "Income Statement": ["Income Statement"],
-    "Financial Position": ["Balance Sheet", "Capital Assets", "Debt Payment Schedule"],
-    "Cash Flow": ["Cash Flow Statement", "Valuation"],
-}
+SENSITIVITY_STEPS = [-0.1, -0.05, 0.05, 0.1]
 
 DEFAULT_ASSUMPTION_YEARS = [2023, 2024, 2025, 2026, 2027]
 ASSUMPTION_SCHEDULES: List[Dict[str, Any]] = [
@@ -411,25 +342,6 @@ ASSUMPTION_SCHEDULE_TIPS: Dict[str, List[str]] = {
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def get_api_base() -> str:
-    if "api_base_url" not in st.session_state:
-        for env_var in API_BASE_ENV_VARS:
-            candidate = os.environ.get(env_var)
-            if candidate:
-                set_api_base(candidate)
-                break
-        else:
-            st.session_state["api_base_url"] = DEFAULT_API_BASE
-    return st.session_state["api_base_url"]
-
-
-def set_api_base(url: str) -> None:
-    cleaned = (url or "").strip()
-    if cleaned:
-        cleaned = cleaned.rstrip("/")
-    st.session_state["api_base_url"] = cleaned or DEFAULT_API_BASE
 
 
 def _normalize_year_list(years: Iterable[Any]) -> List[int]:
@@ -738,73 +650,379 @@ def sync_schedule_years(
     return synced
 
 
-def api_request(
-    method: str,
-    path: str,
-    *,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    files: Optional[Dict[str, Any]] = None,
-    data: Optional[Dict[str, Any]] = None,
-    timeout: int = 120,
-) -> Any:
-    base_url = get_api_base()
-    if not base_url:
-        raise RuntimeError("Configure the API base URL before making requests.")
-    url = f"{base_url}{path if path.startswith('/') else '/' + path}"
+def to_number(value: Any, default: Optional[float] = 0.0) -> Optional[float]:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return default
     try:
-        response = requests.request(
-            method,
-            url,
-            params=params,
-            json=json,
-            files=files,
-            data=data,
-            timeout=timeout,
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def to_decimal(value: Any, default: float = 0.0) -> float:
+    number = to_number(value, None)
+    if number is None:
+        return default
+    if abs(number) > 1:
+        return number / 100.0
+    return number
+
+
+def sum_numeric(frame: pd.DataFrame, column: str) -> float:
+    if column not in frame.columns:
+        return 0.0
+    series = pd.to_numeric(frame[column], errors="coerce")
+    return float(series.fillna(0.0).sum())
+
+
+def avg_numeric(frame: pd.DataFrame, column: str) -> float:
+    if column not in frame.columns:
+        return 0.0
+    series = pd.to_numeric(frame[column], errors="coerce").dropna()
+    if series.empty:
+        return 0.0
+    return float(series.mean())
+
+
+def rows_for_year(frame: pd.DataFrame, year: int) -> pd.DataFrame:
+    if frame.empty or "Year" not in frame.columns:
+        return pd.DataFrame(columns=frame.columns)
+    return frame[frame["Year"] == year].copy()
+
+
+def sanitize_tables(tables: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+    sanitized: Dict[str, pd.DataFrame] = {}
+    for schedule in ASSUMPTION_SCHEDULES:
+        frame = tables.get(schedule["name"]) or pd.DataFrame(columns=schedule["columns"])
+        frame = _coerce_schedule_frame(frame, schedule["columns"])
+        if "Year" in frame.columns:
+            frame["Year"] = pd.to_numeric(frame["Year"], errors="coerce")
+            frame = frame.dropna(subset=["Year"]).copy()
+            frame["Year"] = frame["Year"].astype(int)
+        sanitized[schedule["name"]] = frame
+    return sanitized
+
+
+def gather_years(tables: Dict[str, pd.DataFrame]) -> List[int]:
+    years: Set[int] = set()
+    for frame in tables.values():
+        if "Year" in frame.columns:
+            years.update(int(year) for year in frame["Year"] if pd.notna(year))
+    return sorted(years)
+
+
+def _calculate_staff_cost(frame: pd.DataFrame, prefix: str) -> float:
+    total_column = f"{prefix} Total Cost"
+    total_cost = sum_numeric(frame, total_column)
+    if total_cost:
+        return total_cost
+    hours_column = f"{prefix} Hours per Year"
+    rate_column = f"{prefix} Hourly Rate"
+    hours = sum_numeric(frame, hours_column)
+    rate = avg_numeric(frame, rate_column)
+    return hours * rate
+
+
+def _sum_numeric_columns(frame: pd.DataFrame) -> float:
+    total = 0.0
+    for column in frame.columns:
+        if column == "Year":
+            continue
+        total += sum_numeric(frame, column)
+    return total
+
+
+def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
+    sanitized = sanitize_tables(tables)
+    years = gather_years(sanitized)
+    if not years:
+        years = DEFAULT_ASSUMPTION_YEARS.copy()
+
+    summary_rows: List[Dict[str, Any]] = []
+    performance_rows: List[Dict[str, Any]] = []
+    position_rows: List[Dict[str, Any]] = []
+    cashflow_rows: List[Dict[str, Any]] = []
+
+    traffic_rows: List[Dict[str, Any]] = []
+    profitability_rows: List[Dict[str, Any]] = []
+
+    cumulative_cash = 0.0
+    fixed_assets = 0.0
+    prior_working_capital = 0.0
+    retained_equity = 0.0
+
+    for year in years:
+        demand = rows_for_year(sanitized["Demand & Conversion"], year)
+        pricing = rows_for_year(sanitized["Pricing & Order Economics"], year)
+        acquisition = rows_for_year(sanitized["Acquisition Costs"], year)
+        fulfillment = rows_for_year(sanitized["Fulfillment & Operating Costs"], year)
+        staffing = rows_for_year(sanitized["Staffing Levels"], year)
+        executives = rows_for_year(sanitized["Executive Compensation"], year)
+        benefits = rows_for_year(sanitized["Employee Benefits"], year)
+        overheads = rows_for_year(sanitized["Overheads & Fees"], year)
+        working_capital = rows_for_year(sanitized["Working Capital"], year)
+        capital = rows_for_year(sanitized["Capital Investments"], year)
+        financing = rows_for_year(sanitized["Financing Activities"], year)
+        property_df = rows_for_year(sanitized["Property Portfolio"], year)
+        legal = rows_for_year(sanitized["Legal & Compliance"], year)
+        assets = rows_for_year(sanitized["Asset Register"], year)
+        debt = rows_for_year(sanitized["Debt Schedule"], year)
+
+        total_traffic = 0.0
+        total_orders = 0.0
+        marketing_spend = 0.0
+        for channel in CHANNEL_DEFINITIONS:
+            traffic = sum_numeric(demand, channel["traffic"])
+            conversion = to_decimal(avg_numeric(demand, channel["conversion"]))
+            total_traffic += traffic
+            total_orders += traffic * conversion
+            cpc = avg_numeric(acquisition, channel["cpc"])
+            marketing_spend += traffic * cpc
+
+        churn_rate = to_decimal(avg_numeric(demand, "Churn Rate"))
+        avg_item_value = avg_numeric(pricing, "Average Item Value")
+        items_per_order = max(avg_numeric(pricing, "Number of Items per Order"), 1.0)
+        markdown = to_decimal(avg_numeric(pricing, "Average Markdown"))
+        promotions = to_decimal(avg_numeric(pricing, "Average Promotion/Discount"))
+        cogs_pct = to_decimal(avg_numeric(pricing, "COGS Percentage"))
+
+        gross_order_value = total_orders * items_per_order * avg_item_value
+        net_revenue = gross_order_value * (1 - markdown) * (1 - promotions)
+        cogs = net_revenue * cogs_pct
+        gross_profit = net_revenue - cogs
+
+        freight = avg_numeric(fulfillment, "Freight/Shipping per Order")
+        labor_per_order = avg_numeric(fulfillment, "Labor/Handling per Order")
+        per_order_cost = freight + labor_per_order
+        fulfillment_cost = per_order_cost * total_orders
+        warehouse_rent = sum_numeric(fulfillment, "General Warehouse Rent")
+        other_operating = sum_numeric(fulfillment, "Other")
+        interest_expense = sum_numeric(fulfillment, "Interest")
+        tax_rate_override = to_decimal(avg_numeric(fulfillment, "Tax Rate"), DEFAULT_TAX_RATE)
+
+        staffing_cost = (
+            _calculate_staff_cost(staffing, "Direct Staff")
+            + _calculate_staff_cost(staffing, "Indirect Staff")
+            + _calculate_staff_cost(staffing, "Part-Time Staff")
         )
-    except requests.RequestException as exc:  # pragma: no cover - network failure
-        raise RuntimeError(f"Request to {url} failed: {exc}") from exc
+        executive_comp = sum(
+            sum_numeric(executives, column)
+            for column in executives.columns
+            if column != "Year"
+        )
+        benefits_total = sum_numeric(benefits, "Total Benefits")
+        if not benefits_total:
+            benefit_columns = [
+                "Pension Total Cost",
+                "Medical Insurance Total Cost",
+                "Child Benefit Total Cost",
+                "Car Benefit Total Cost",
+            ]
+            benefits_total = sum(sum_numeric(benefits, col) for col in benefit_columns)
 
-    if response.status_code >= 400:
-        try:
-            detail = response.json()
-        except ValueError:
-            detail = response.text
-        raise RuntimeError(f"{response.status_code} {response.reason}: {detail}")
+        overhead_salaries = sum_numeric(overheads, "Salaries, Wages & Benefits")
+        office_rent = sum_numeric(overheads, "Office Rent")
+        professional_fees = sum_numeric(overheads, "Professional Fees")
+        depreciation = sum_numeric(overheads, "Depreciation") + sum_numeric(assets, "Asset_1_Depreciation")
 
-    content_type = response.headers.get("content-type", "")
-    if "application/json" in content_type:
-        return response.json()
-    if "application/vnd.openxmlformats" in content_type or path.endswith("export_excel"):
-        return response.content
-    return response.text
+        property_cost = _sum_numeric_columns(property_df)
+        legal_cost = _sum_numeric_columns(legal)
 
+        operating_expenses = (
+            marketing_spend
+            + fulfillment_cost
+            + warehouse_rent
+            + other_operating
+            + staffing_cost
+            + executive_comp
+            + benefits_total
+            + overhead_salaries
+            + office_rent
+            + professional_fees
+            + property_cost
+            + legal_cost
+        )
 
-def api_get(path: str, **kwargs: Any) -> Any:
-    return api_request("GET", path, **kwargs)
+        ebitda = gross_profit - operating_expenses
+        ebit = ebitda - depreciation
 
+        interest_rate = to_decimal(avg_numeric(financing, "Interest Rate"))
+        debt_balance = sum_numeric(debt, "Debt_1_Amount")
+        interest_total = interest_expense + (debt_balance * interest_rate)
 
-def api_post(path: str, **kwargs: Any) -> Any:
-    return api_request("POST", path, **kwargs)
+        pre_tax_income = ebit - interest_total
+        tax_rate = tax_rate_override if tax_rate_override else DEFAULT_TAX_RATE
+        taxes = max(pre_tax_income, 0.0) * tax_rate
+        net_income = pre_tax_income - taxes
 
+        receivable_days = avg_numeric(working_capital, "Accounts Receivable Days")
+        inventory_days = avg_numeric(working_capital, "Inventory Days")
+        payable_days = avg_numeric(working_capital, "Accounts Payable Days")
+        receivables = net_revenue / 365.0 * receivable_days
+        inventory_value = cogs / 365.0 * inventory_days
+        payables = cogs / 365.0 * payable_days
+        current_working_capital = receivables + inventory_value - payables
+        delta_working_capital = current_working_capital - prior_working_capital
+        prior_working_capital = current_working_capital
 
-@lru_cache(maxsize=None)
-def load_scenario_defaults_from_api(scenario_type: str) -> Dict[str, float]:
-    fallback = dict(SCENARIO_DEFAULTS.get(scenario_type, SCENARIO_DEFAULTS["Base Case"]))
-    try:
-        response = api_get(f"/get_scenario_parameters/{requests.utils.quote(scenario_type)}")
-    except RuntimeError:
-        return fallback
-    parameters = response.get("parameters") if isinstance(response, dict) else response
-    if isinstance(parameters, dict):
-        merged: Dict[str, float] = {**fallback}
-        for key, value in parameters.items():
-            try:
-                merged[key] = float(value)
-            except (TypeError, ValueError):
-                continue
-        return merged
-    return fallback
+        capex = sum_numeric(capital, "Technology Development") + sum_numeric(
+            capital, "Office Equipment"
+        )
+        equity_raised = sum_numeric(financing, "Equity Raised")
+        dividends = sum_numeric(financing, "Dividends Paid")
+        debt_issued = sum_numeric(financing, "Debt Issued")
+
+        cfo = net_income + depreciation - delta_working_capital
+        cfi = -capex
+        cff = equity_raised + debt_issued - dividends
+        net_cash_flow = cfo + cfi + cff
+        cumulative_cash += net_cash_flow
+        fixed_assets = max(fixed_assets + capex - depreciation, 0.0)
+        retained_equity += net_income + equity_raised - dividends
+
+        total_assets = cumulative_cash + receivables + inventory_value + fixed_assets
+        total_liabilities = payables + debt_balance
+        equity_value = total_assets - total_liabilities
+
+        gross_margin_pct = (gross_profit / net_revenue * 100.0) if net_revenue else 0.0
+        ebitda_margin_pct = (ebitda / net_revenue * 100.0) if net_revenue else 0.0
+        net_margin_pct = (net_income / net_revenue * 100.0) if net_revenue else 0.0
+
+        summary_rows.append(
+            {
+                "Year": year,
+                "Net Revenue": net_revenue,
+                "Gross Profit": gross_profit,
+                "EBITDA": ebitda,
+                "Net Income": net_income,
+                "Gross Margin %": gross_margin_pct,
+                "EBITDA Margin %": ebitda_margin_pct,
+                "Net Margin %": net_margin_pct,
+                "Total Orders": total_orders,
+            }
+        )
+
+        performance_rows.append(
+            {
+                "Year": year,
+                "Total Traffic": total_traffic,
+                "Total Orders": total_orders,
+                "Churn Rate": churn_rate,
+                "Average Item Value": avg_item_value,
+                "Items per Order": items_per_order,
+                "Marketing Spend": marketing_spend,
+                "Fulfillment Cost": fulfillment_cost + warehouse_rent + other_operating,
+                "Staffing Cost": staffing_cost + executive_comp,
+                "Benefits": benefits_total,
+                "Overheads": overhead_salaries + office_rent + professional_fees,
+                "Property & Legal": property_cost + legal_cost,
+            }
+        )
+
+        position_rows.append(
+            {
+                "Year": year,
+                "Cash": cumulative_cash,
+                "Accounts Receivable": receivables,
+                "Inventory": inventory_value,
+                "Fixed Assets": fixed_assets,
+                "Accounts Payable": payables,
+                "Debt": debt_balance,
+                "Equity": equity_value,
+            }
+        )
+
+        cashflow_rows.append(
+            {
+                "Year": year,
+                "Cash Flow from Operations": cfo,
+                "Cash Flow from Investing": cfi,
+                "Cash Flow from Financing": cff,
+                "Net Cash Flow": net_cash_flow,
+                "Ending Cash": cumulative_cash,
+            }
+        )
+
+        traffic_rows.append(
+            {
+                "Year": year,
+                "Traffic": total_traffic,
+                "Orders": total_orders,
+            }
+        )
+
+        profitability_rows.append(
+            {
+                "Year": year,
+                "EBITDA": ebitda,
+                "Net Income": net_income,
+            }
+        )
+
+    summary_df = pd.DataFrame(summary_rows)
+    performance_df = pd.DataFrame(performance_rows)
+    position_df = pd.DataFrame(position_rows)
+    cashflow_df = pd.DataFrame(cashflow_rows)
+
+    metrics_cards: List[Dict[str, Any]] = []
+    if not summary_df.empty:
+        latest = summary_df.iloc[-1]
+        metrics_cards = [
+            {"metric": "Net Revenue", "current": latest["Net Revenue"]},
+            {"metric": "Gross Profit", "current": latest["Gross Profit"]},
+            {"metric": "EBITDA", "current": latest["EBITDA"]},
+            {"metric": "Net Income", "current": latest["Net Income"]},
+        ]
+
+    traffic_df = pd.DataFrame(traffic_rows)
+    profitability_df = pd.DataFrame(profitability_rows)
+
+    cash_flows = cashflow_df["Net Cash Flow"].to_list() if not cashflow_df.empty else []
+    discount_rate = to_decimal(
+        avg_numeric(sanitized["Financing Activities"], "Interest Rate"), DEFAULT_DISCOUNT_RATE
+    )
+    discounted = [
+        cf / ((1 + discount_rate) ** idx) for idx, cf in enumerate(cash_flows, start=1)
+    ] if discount_rate is not None and cash_flows else []
+    npv = sum(discounted) if discounted else 0.0
+    cumulative = cashflow_df["Ending Cash"].tolist() if not cashflow_df.empty else []
+    payback_period = None
+    if cumulative:
+        for idx, balance in enumerate(cumulative, start=1):
+            if balance >= 0:
+                payback_period = years[idx - 1]
+                break
+
+    sensitivity_data: List[Dict[str, Any]] = []
+    if not summary_df.empty:
+        base_net_income = summary_df.iloc[-1]["Net Income"]
+        base_revenue = summary_df.iloc[-1]["Net Revenue"]
+        for step in SENSITIVITY_STEPS:
+            sensitivity_data.append(
+                {
+                    "Adjustment": f"Revenue {int(step * 100)}%",
+                    "Projected Net Income": base_net_income * (1 + step),
+                }
+            )
+            sensitivity_data.append(
+                {
+                    "Adjustment": f"Orders {int(step * 100)}%",
+                    "Projected Net Revenue": base_revenue * (1 + step),
+                }
+            )
+
+    return {
+        "summary": summary_df,
+        "performance": performance_df,
+        "position": position_df,
+        "cashflow": cashflow_df,
+        "metrics_cards": metrics_cards,
+        "traffic": traffic_df,
+        "profitability": profitability_df,
+        "npv": npv,
+        "payback_year": payback_period,
+        "sensitivity": pd.DataFrame(sensitivity_data),
+    }
 
 
 def to_dataframe(records: Any) -> pd.DataFrame:
@@ -883,30 +1101,27 @@ def build_revenue_figure(payload: Dict[str, Any]) -> go.Figure:
 
 def build_traffic_figure(payload: Dict[str, Any]) -> go.Figure:
     years = payload.get("years") or []
-    ltv = payload.get("ltv") or []
-    cac = payload.get("cac") or []
-    ratio = payload.get("ltv_cac_ratio") or []
+    traffic = payload.get("traffic") or []
+    orders = payload.get("orders") or []
     fig = go.Figure()
-    if years and any(pd.notna(val) for val in ltv):
-        fig.add_bar(name="LTV", x=years, y=ltv, marker_color="#22c55e")
-    if years and any(pd.notna(val) for val in cac):
-        fig.add_bar(name="CAC", x=years, y=cac, marker_color="#ef4444")
-    if years and any(pd.notna(val) for val in ratio):
+    if years and any(pd.notna(val) for val in traffic):
+        fig.add_bar(name="Traffic", x=years, y=traffic, marker_color="#2563eb")
+    if years and any(pd.notna(val) for val in orders):
         fig.add_trace(
             go.Scatter(
-                name="LTV/CAC",
+                name="Orders",
                 x=years,
-                y=ratio,
+                y=orders,
                 mode="lines+markers",
-                marker=dict(color="#6366f1"),
+                marker=dict(color="#16a34a"),
                 yaxis="y2",
             )
         )
     fig.update_layout(
-        title="Customer economics",
+        title="Traffic & orders",
         barmode="group",
-        yaxis=dict(title="Value", tickprefix="$", separatethousands=True),
-        yaxis2=dict(title="Ratio", overlaying="y", side="right", tickformat=".2f"),
+        yaxis=dict(title="Traffic", separatethousands=True),
+        yaxis2=dict(title="Orders", overlaying="y", side="right", separatethousands=True),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(t=60, r=40, l=40, b=40),
     )
@@ -915,21 +1130,31 @@ def build_traffic_figure(payload: Dict[str, Any]) -> go.Figure:
 
 def build_profitability_figure(payload: Dict[str, Any]) -> go.Figure:
     years = payload.get("years") or []
-    closing_cash = payload.get("closing_cash_balance") or []
+    ebitda = payload.get("ebitda") or []
+    net_income = payload.get("net_income") or []
+    cash = payload.get("cash") or []
     fig = go.Figure()
-    if years and any(pd.notna(val) for val in closing_cash):
+    if years and any(pd.notna(val) for val in ebitda):
+        fig.add_bar(name="EBITDA", x=years, y=ebitda, marker_color="#a855f7")
+    if years and any(pd.notna(val) for val in net_income):
+        fig.add_bar(name="Net Income", x=years, y=net_income, marker_color="#f97316")
+    if years and any(pd.notna(val) for val in cash):
         fig.add_trace(
             go.Scatter(
-                name="Closing Cash Balance",
+                name="Ending Cash",
                 x=years,
-                y=closing_cash,
+                y=cash,
                 mode="lines+markers",
-                line=dict(color="#f97316", width=3),
+                marker=dict(color="#0ea5e9"),
+                yaxis="y2",
             )
         )
     fig.update_layout(
-        title="Closing cash balance",
-        yaxis=dict(title="Cash", tickprefix="$", separatethousands=True),
+        title="Profitability & cash",
+        barmode="group",
+        yaxis=dict(title="Profit", tickprefix="$", separatethousands=True),
+        yaxis2=dict(title="Ending Cash", overlaying="y", side="right", tickprefix="$", separatethousands=True),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(t=60, r=40, l=40, b=40),
     )
     return fig
@@ -1355,642 +1580,281 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
         )
         st.session_state["assumption_tables"] = sync_schedule_years(base_years, updated_tables)
 
-        if st.button("Save assumptions", type="primary"):
+        if st.button("Apply assumptions", type="primary"):
             combined_df = combine_assumption_tables(st.session_state["assumption_tables"])
             if combined_df.empty:
-                st.warning("Add at least one forecast year before saving assumptions.")
+                st.warning("Add at least one forecast year before applying assumptions.")
             else:
-                payload = [
-                    {k: (None if pd.isna(v) else v) for k, v in row.items()}
-                    for row in combined_df.to_dict(orient="records")
-                ]
-                try:
-                    with st.spinner("Saving assumptions..."):
-                        response = api_post("/save_assumptions", json=payload)
-                    st.success(response.get("message", "Assumptions saved."))
-                    st.session_state["assumptions_raw"] = payload
-                except RuntimeError as exc:
-                    st.error(str(exc))
-
-        with st.form("filter_form"):
-            st.subheader("Filter time period & rebuild caches")
-            scenario_type = st.selectbox("Scenario", SCENARIO_TYPES, key="filter_scenario")
-            col1, col2, col3, col4 = st.columns(4)
-            start_year = col1.number_input("Start year", value=2023, step=1)
-            end_year = col2.number_input("End year", value=2028, step=1)
-            discount_rate = col3.number_input("Discount rate", value=0.2, step=0.01)
-            wacc = col4.number_input("WACC", value=0.1, step=0.01)
-            col5, col6, col7 = st.columns(3)
-            perpetual_growth = col5.number_input("Perpetual growth", value=0.02, step=0.01)
-            tax_rate = col6.number_input("Tax rate", value=0.25, step=0.01)
-            inflation_rate = col7.number_input("Inflation rate", value=0.02, step=0.01)
-            direct_labor_rate = st.number_input(
-                "Direct labor rate increase",
-                value=0.03,
-                step=0.01,
-            )
-            submitted = st.form_submit_button("Apply filter & refresh")
-            if submitted:
-                payload = {
-                    "scenario_type": scenario_type,
-                    "start_year": int(start_year),
-                    "end_year": int(end_year),
-                    "discount_rate": float(discount_rate),
-                    "wacc": float(wacc),
-                    "perpetual_growth": float(perpetual_growth),
-                    "tax_rate": float(tax_rate),
-                    "inflation_rate": float(inflation_rate),
-                    "direct_labor_rate_increase": float(direct_labor_rate),
-                }
-                try:
-                    with st.spinner("Applying filters..."):
-                        response = api_post("/filter_time_period", json=payload)
-                    st.success(response.get("message", "Time period updated."))
-                except RuntimeError as exc:
-                    st.error(str(exc))
-
-        with st.form("base_analysis_form"):
-            st.subheader("Run base analysis")
-            col1, col2, col3 = st.columns(3)
-            discount_rate = col1.number_input("Discount rate", value=20.0, step=1.0)
-            wacc = col2.number_input("WACC", value=10.0, step=1.0)
-            perpetual_growth = col3.number_input("Perpetual growth", value=2.0, step=0.5)
-            col4, col5, col6 = st.columns(3)
-            tax_rate = col4.number_input("Tax rate", value=0.0, step=0.5)
-            inflation_rate = col5.number_input("Inflation rate", value=0.0, step=0.5)
-            direct_labor_rate = col6.number_input(
-                "Direct labor rate increase", value=0.0, step=0.5
-            )
-            forecast_years = st.number_input(
-                "Forecast years", value=10, min_value=1, max_value=30, step=1
-            )
-            run_base = st.form_submit_button("Run analysis", type="primary")
-            if run_base:
-                payload = {
-                    "discount_rate": float(discount_rate),
-                    "wacc": float(wacc),
-                    "perpetual_growth": float(perpetual_growth),
-                    "tax_rate": float(tax_rate),
-                    "inflation_rate": float(inflation_rate),
-                    "direct_labor_rate_increase": float(direct_labor_rate),
-                    "normal_forecast_years": int(forecast_years),
-                }
-                try:
-                    with st.spinner("Running base analysis..."):
-                        response = api_post("/run_base_analysis", json=payload)
-                    st.session_state["base_analysis_result"] = response
-                    st.success("Base analysis completed.")
-                except RuntimeError as exc:
-                    st.error(str(exc))
-
-        if st.session_state.get("base_analysis_result"):
-            st.subheader("Latest base analysis snapshot")
-            st.json(st.session_state["base_analysis_result"])
+                st.session_state["assumptions_raw"] = combined_df.to_dict(orient="records")
+                with st.spinner("Rebuilding dashboards from manual inputs..."):
+                    st.session_state["model_results"] = compute_model_outputs(
+                        st.session_state["assumption_tables"]
+                    )
+                st.success("Assumptions applied. All tabs now reflect your manual inputs.")
 
 
 def render_metrics_tab(tab: st.delta_generator.DeltaGenerator) -> None:
     with tab:
         st.header("Key financial metrics")
-        st.write(
-            "Review summary KPIs, operational metrics, valuation outputs, and scenario"
-            " comparisons. Adjust scenario parameters to recalculate downstream tables."
-        )
+        st.write("Metrics update automatically from the manual assumption schedules.")
 
-        if st.button("Refresh metrics", key="refresh_metrics") or "summary_metrics" not in st.session_state:
-            try:
-                with st.spinner("Fetching metrics..."):
-                    st.session_state["summary_metrics"] = api_get("/display_metrics_summary_of_analysis")
-                    st.session_state["operational_metrics"] = api_get("/operational_metrics").get("metrics", [])
-                    st.session_state["valuation"] = api_get("/dcf_valuation")
-                    st.session_state["scenario_metrics"] = api_get("/display_metrics_scenario_analysis").get("data")
-                    st.session_state["implications"] = api_get("/key_implications")
-                    charts_payload = api_get("/revenue_chart_data")
-                    traffic_payload = api_get("/traffic_chart_data")
-                    profitability_payload = api_get("/profitability_chart_data")
-                st.session_state["revenue_chart"] = charts_payload.get("revenue_chart_data", charts_payload)
-                st.session_state["traffic_chart"] = traffic_payload.get("traffic_chart_data", traffic_payload)
-                st.session_state["profitability_chart"] = profitability_payload.get(
-                    "profitability_chart_data", profitability_payload
-                )
-            except RuntimeError as exc:
-                st.error(str(exc))
+        results = st.session_state.get("model_results")
+        if not results:
+            st.info("Apply assumptions on the Input tab to calculate metrics.")
+            return
 
-        render_table("Summary metrics", st.session_state.get("summary_metrics"))
-        render_metric_cards(st.session_state.get("operational_metrics", []))
+        summary_df: pd.DataFrame = results.get("summary", pd.DataFrame())
+        if summary_df.empty:
+            st.info("No summary metrics available yet.")
+        else:
+            st.dataframe(summary_df.set_index("Year"), use_container_width=True)
 
-        valuation = st.session_state.get("valuation")
-        if valuation:
-            col1, col2 = st.columns(2)
-            col1.metric("Enterprise Value ($M)", f"{valuation.get('enterprise_value_m', 0):,.1f}")
-            col2.metric("Equity Value ($M)", f"{valuation.get('equity_value_m', 0):,.1f}")
+        render_metric_cards(results.get("metrics_cards", []))
 
-        render_table("Scenario metrics", st.session_state.get("scenario_metrics"))
+        if not summary_df.empty:
+            years = summary_df["Year"].tolist()
+            revenue_payload = {
+                "years": years,
+                "net_revenue": summary_df["Net Revenue"].tolist(),
+                "gross_margin": (summary_df["Gross Margin %"] / 100.0).tolist(),
+                "ebitda_margin": (summary_df["EBITDA Margin %"] / 100.0).tolist(),
+            }
+            traffic_df: pd.DataFrame = results.get("traffic", pd.DataFrame())
+            profitability_df: pd.DataFrame = results.get("profitability", pd.DataFrame())
 
-        implications = st.session_state.get("implications")
-        if implications:
-            st.subheader("Narrative implications")
-            items = implications.get("implications") if isinstance(implications, dict) else implications
-            if isinstance(items, list) and items:
-                for item in items:
-                    st.write(f"• {item}")
-            elif isinstance(items, str):
-                st.info(items)
-
-        st.subheader("Scenario management")
-        scenario_type = st.selectbox("Scenario type", SCENARIO_TYPES, key="scenario_type")
-        if st.button("Load scenario defaults", key="load_scenario_defaults"):
-            try:
-                params = load_scenario_defaults_from_api(scenario_type)
-                for key, value in params.items():
-                    st.session_state[f"scenario_param_{key}"] = value
-                st.success("Scenario defaults loaded.")
-            except RuntimeError as exc:
-                st.warning(str(exc))
-
-        with st.form("scenario_form"):
-            col1, col2, col3, col4 = st.columns(4)
-            discount_rate = col1.number_input(
-                "Discount rate", value=st.session_state.get("scenario_discount_rate", 0.2), step=0.01
+            charts_row = st.columns(2)
+            charts_row[0].plotly_chart(
+                build_revenue_figure(revenue_payload), use_container_width=True
             )
-            tax_rate = col2.number_input(
-                "Tax rate", value=st.session_state.get("scenario_tax_rate", 0.25), step=0.01
-            )
-            inflation_rate = col3.number_input(
-                "Inflation rate", value=st.session_state.get("scenario_inflation", 0.02), step=0.01
-            )
-            direct_labor_rate = col4.number_input(
-                "Direct labor increase", value=st.session_state.get("scenario_labor", 0.03), step=0.01
-            )
-            params_container: Dict[str, float] = {}
-            st.markdown("**Scenario parameters**")
-            for key, label in SCENARIO_PARAM_LABELS.items():
-                default_value = st.session_state.get(
-                    f"scenario_param_{key}",
-                    SCENARIO_DEFAULTS.get(scenario_type, SCENARIO_DEFAULTS["Base Case"]).get(key, 1.0),
-                )
-                params_container[key] = st.number_input(
-                    label,
-                    value=float(default_value),
-                    step=0.05,
-                    key=f"scenario_param_input_{key}",
-                )
-            scenario_submit = st.form_submit_button("Recalculate scenario", type="primary")
-            if scenario_submit:
-                payload = {
-                    "scenario_type": scenario_type,
-                    "scenario_params": params_container,
-                    "discount_rate": float(discount_rate),
-                    "tax_rate": float(tax_rate),
-                    "inflation_rate": float(inflation_rate),
-                    "direct_labor_rate_increase": float(direct_labor_rate),
+            if not traffic_df.empty:
+                traffic_payload = {
+                    "years": traffic_df["Year"].tolist(),
+                    "traffic": traffic_df["Traffic"].tolist(),
+                    "orders": traffic_df["Orders"].tolist(),
                 }
-                try:
-                    with st.spinner("Updating scenario..."):
-                        response = api_post("/select_scenario", json=payload)
-                    st.success(response.get("message", "Scenario updated."))
-                    st.session_state["scenario_discount_rate"] = float(discount_rate)
-                    st.session_state["scenario_tax_rate"] = float(tax_rate)
-                    st.session_state["scenario_inflation"] = float(inflation_rate)
-                    st.session_state["scenario_labor"] = float(direct_labor_rate)
-                    for key, value in params_container.items():
-                        st.session_state[f"scenario_param_{key}"] = value
-                except RuntimeError as exc:
-                    st.error(str(exc))
-
-        if st.session_state.get("revenue_chart"):
-            col1, col2 = st.columns(2)
-            col1.plotly_chart(
-                build_revenue_figure(st.session_state["revenue_chart"]), use_container_width=True
-            )
-            col2.plotly_chart(
-                build_traffic_figure(st.session_state["traffic_chart"]), use_container_width=True
-            )
-        if st.session_state.get("profitability_chart"):
-            st.plotly_chart(
-                build_profitability_figure(st.session_state["profitability_chart"]),
-                use_container_width=True,
-            )
+                charts_row[1].plotly_chart(
+                    build_traffic_figure(traffic_payload), use_container_width=True
+                )
+            if not profitability_df.empty:
+                cashflow_df = results.get("cashflow", pd.DataFrame())
+                cash_series = (
+                    cashflow_df["Ending Cash"].tolist()
+                    if not cashflow_df.empty
+                    else []
+                )
+                profitability_payload = {
+                    "years": profitability_df["Year"].tolist(),
+                    "ebitda": profitability_df["EBITDA"].tolist(),
+                    "net_income": profitability_df["Net Income"].tolist(),
+                    "cash": cash_series,
+                }
+                st.plotly_chart(
+                    build_profitability_figure(profitability_payload),
+                    use_container_width=True,
+                )
 
 
 def render_performance_tab(tab: st.delta_generator.DeltaGenerator) -> None:
     with tab:
         st.header("Financial performance dashboards")
-        st.write("Visualize revenue drivers, breakeven analysis, waterfall bridges, and margin trends.")
+        st.write("Inspect demand, conversion, and operating expense trends derived from your inputs.")
 
-        if st.button("Refresh performance visuals", key="refresh_performance") or "waterfall_chart" not in st.session_state:
-            try:
-                with st.spinner("Loading performance visuals..."):
-                    st.session_state["waterfall_chart"] = api_get("/waterfall_chart_data")
-                    st.session_state["breakeven_chart"] = api_get("/breakeven_chart_data")
-                    st.session_state["consideration_chart"] = api_get("/consideration_chart_data")
-                    st.session_state["margin_safety_chart"] = api_get("/margin_safety_chart")
-                    st.session_state["margin_trends_chart"] = api_get("/profitability_margin_trends_chart_data")
-            except RuntimeError as exc:
-                st.error(str(exc))
+        results = st.session_state.get("model_results")
+        if not results:
+            st.info("Apply assumptions on the Input tab to calculate performance views.")
+            return
 
-        col1, col2 = st.columns(2)
-        if st.session_state.get("waterfall_chart"):
-            col1.plotly_chart(
-                build_waterfall(st.session_state["waterfall_chart"], "Waterfall"),
-                use_container_width=True,
+        performance_df: pd.DataFrame = results.get("performance", pd.DataFrame())
+        if performance_df.empty:
+            st.info("Add assumption data to see performance tables.")
+            return
+
+        st.dataframe(performance_df.set_index("Year"), use_container_width=True)
+
+        fig = go.Figure()
+        for column, color in [
+            ("Marketing Spend", "#3b82f6"),
+            ("Fulfillment Cost", "#10b981"),
+            ("Staffing Cost", "#f97316"),
+            ("Benefits", "#8b5cf6"),
+            ("Overheads", "#ef4444"),
+        ]:
+            fig.add_trace(
+                go.Scatter(
+                    name=column,
+                    x=performance_df["Year"],
+                    y=performance_df[column],
+                    mode="lines+markers",
+                    marker=dict(color=color),
+                )
             )
-        if st.session_state.get("breakeven_chart"):
-            breakeven = st.session_state["breakeven_chart"]
-            traces = breakeven.get("traces") if isinstance(breakeven, dict) else None
-            if traces:
-                fig = go.Figure(traces)
-                fig.update_layout(
-                    title="Breakeven analysis",
-                    yaxis=dict(title="Revenue", tickprefix="$", separatethousands=True),
-                    legend=dict(orientation="h", y=-0.2),
-                )
-                col2.plotly_chart(fig, use_container_width=True)
-        if st.session_state.get("consideration_chart"):
-            consideration = st.session_state["consideration_chart"]
-            traces = consideration.get("traces") if isinstance(consideration, dict) else None
-            if traces:
-                fig = go.Figure(traces)
-                fig.update_layout(
-                    title="Customer consideration funnel",
-                    yaxis=dict(title="Rate", tickformat=".0%"),
-                    legend=dict(orientation="h", y=-0.2),
-                )
-                st.plotly_chart(fig, use_container_width=True)
-        if st.session_state.get("margin_safety_chart"):
-            margin_safety = st.session_state["margin_safety_chart"]
-            traces = margin_safety.get("traces") if isinstance(margin_safety, dict) else None
-            if traces:
-                fig = go.Figure(traces)
-                fig.update_layout(
-                    title="Margin of safety",
-                    yaxis=dict(title="Margin ($)", tickprefix="$", separatethousands=True),
-                    yaxis2=dict(title="Margin %", overlaying="y", side="right", tickformat=".0%"),
-                    legend=dict(orientation="h", y=-0.2),
-                )
-                st.plotly_chart(fig, use_container_width=True)
-        if st.session_state.get("margin_trends_chart"):
-            margin_trends = st.session_state["margin_trends_chart"]
-            traces = margin_trends.get("traces") if isinstance(margin_trends, dict) else None
-            if traces:
-                fig = go.Figure(traces)
-                fig.update_layout(title="Margin trends", yaxis=dict(tickformat=".0%"))
-                st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(
+            title="Operating cost profile",
+            yaxis=dict(title="Cost", tickprefix="$", separatethousands=True),
+            legend=dict(orientation="h", y=-0.2),
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
 
 def render_position_tab(tab: st.delta_generator.DeltaGenerator) -> None:
     with tab:
-        st.header("Financial position & supporting schedules")
-        st.write("Inspect balance sheet, capital assets, and debt amortization outputs.")
+        st.header("Financial position")
+        st.write("Review balance sheet items calculated from the manual schedules.")
 
-        if st.button("Load financial position", key="refresh_position") or "financial_position" not in st.session_state:
-            try:
-                with st.spinner("Loading financial position..."):
-                    response = api_get(
-                        "/financial_schedules",
-                        params=[("schedules", item) for item in SCHEDULE_OPTIONS["Financial Position"]],
-                    )
-                st.session_state["financial_position"] = response.get("schedules", [])
-            except RuntimeError as exc:
-                st.error(str(exc))
+        results = st.session_state.get("model_results")
+        if not results:
+            st.info("Apply assumptions on the Input tab to calculate the balance sheet.")
+            return
 
-        schedules = st.session_state.get("financial_position", [])
-        if schedules:
-            render_schedule_section("Financial Position", schedules)
+        position_df: pd.DataFrame = results.get("position", pd.DataFrame())
+        if position_df.empty:
+            st.info("No balance sheet data available yet.")
+            return
+
+        st.dataframe(position_df.set_index("Year"), use_container_width=True)
+
+        fig = go.Figure()
+        for column, color in [
+            ("Cash", "#0ea5e9"),
+            ("Accounts Receivable", "#22c55e"),
+            ("Inventory", "#facc15"),
+            ("Fixed Assets", "#6366f1"),
+        ]:
+            fig.add_trace(
+                go.Scatter(
+                    name=column,
+                    x=position_df["Year"],
+                    y=position_df[column],
+                    mode="lines+markers",
+                    marker=dict(color=color),
+                )
+            )
+        fig.update_layout(
+            title="Assets over time",
+            yaxis=dict(title="Value", tickprefix="$", separatethousands=True),
+            legend=dict(orientation="h", y=-0.2),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        liabilities_fig = go.Figure()
+        for column, color in [("Accounts Payable", "#f87171"), ("Debt", "#334155"), ("Equity", "#a855f7")]:
+            liabilities_fig.add_trace(
+                go.Scatter(
+                    name=column,
+                    x=position_df["Year"],
+                    y=position_df[column],
+                    mode="lines+markers",
+                    marker=dict(color=color),
+                )
+            )
+        liabilities_fig.update_layout(
+            title="Liabilities & equity",
+            yaxis=dict(title="Value", tickprefix="$", separatethousands=True),
+            legend=dict(orientation="h", y=-0.2),
+        )
+        st.plotly_chart(liabilities_fig, use_container_width=True)
 
 
 def render_cashflow_tab(tab: st.delta_generator.DeltaGenerator) -> None:
     with tab:
-        st.header("Cash flow and valuation")
-        st.write("Review detailed cash flow statements and valuation bridges.")
+        st.header("Cash flow statement")
+        st.write("Track operating, investing, and financing cash flows derived from manual assumptions.")
 
-        if st.button("Load cash flow", key="refresh_cashflow") or "cashflow_schedules" not in st.session_state:
-            try:
-                with st.spinner("Loading cash flow schedules..."):
-                    response = api_get(
-                        "/financial_schedules",
-                        params=[("schedules", item) for item in SCHEDULE_OPTIONS["Cash Flow"]],
-                    )
-                    cashflow_payload = api_get("/cashflow_forecast_chart_data")
-                    dcf_payload = api_get("/dcf_summary_chart_data")
-                st.session_state["cashflow_schedules"] = response.get("schedules", [])
-                st.session_state["cashflow_chart"] = cashflow_payload.get(
-                    "cashflow_forecast_chart_data", cashflow_payload
-                )
-                st.session_state["dcf_chart"] = dcf_payload.get("data", dcf_payload)
-            except RuntimeError as exc:
-                st.error(str(exc))
+        results = st.session_state.get("model_results")
+        if not results:
+            st.info("Apply assumptions on the Input tab to calculate cash flow results.")
+            return
 
-        schedules = st.session_state.get("cashflow_schedules", [])
-        if schedules:
-            render_schedule_section("Cash Flow", schedules)
-        if st.session_state.get("cashflow_chart"):
-            st.plotly_chart(build_cashflow_figure(st.session_state["cashflow_chart"]), use_container_width=True)
-        if st.session_state.get("dcf_chart"):
-            st.plotly_chart(build_waterfall(st.session_state["dcf_chart"], "DCF summary"), use_container_width=True)
+        cashflow_df: pd.DataFrame = results.get("cashflow", pd.DataFrame())
+        if cashflow_df.empty:
+            st.info("No cash flow data available yet.")
+            return
+
+        st.dataframe(cashflow_df.set_index("Year"), use_container_width=True)
+
+        payload = {
+            "years": cashflow_df["Year"].tolist(),
+            "cash_from_operations": cashflow_df["Cash Flow from Operations"].tolist(),
+            "cash_from_investing": cashflow_df["Cash Flow from Investing"].tolist(),
+            "net_cash_flow": cashflow_df["Net Cash Flow"].tolist(),
+        }
+        st.plotly_chart(build_cashflow_figure(payload), use_container_width=True)
 
 
 def render_sensitivity_tab(tab: st.delta_generator.DeltaGenerator) -> None:
     with tab:
-        st.header("Sensitivity analysis & what-if tooling")
-        st.write("Test key drivers, apply what-if adjustments, and run goal seek routines.")
+        st.header("Sensitivity analysis")
+        st.write("Quickly compare revenue and profit outcomes for common percentage shifts.")
 
-        with st.form("top_rank_form"):
-            st.subheader("Top-rank sensitivity")
-            variables = st.multiselect(
-                "Variables to test",
-                options=SENSITIVITY_VARIABLES,
-                default=[SENSITIVITY_VARIABLES[0]],
+        results = st.session_state.get("model_results")
+        if not results:
+            st.info("Apply assumptions on the Input tab to generate sensitivity snapshots.")
+            return
+
+        sensitivity_df: pd.DataFrame = results.get("sensitivity", pd.DataFrame())
+        if sensitivity_df.empty:
+            st.info("No sensitivity data available yet.")
+            return
+
+        st.dataframe(sensitivity_df, use_container_width=True)
+
+        bars = go.Figure()
+        bars.add_trace(
+            go.Bar(
+                name="Impact",
+                x=sensitivity_df["Adjustment"],
+                y=sensitivity_df.iloc[:, 1],
+                marker_color="#2563eb",
             )
-            change_pct = st.slider("Change percentage", min_value=5.0, max_value=20.0, value=10.0, step=0.5)
-            discount_rate = st.number_input("Discount rate", value=0.2, step=0.01)
-            run_top_rank = st.form_submit_button("Run sensitivity", type="primary")
-            if run_top_rank:
-                payload = {
-                    "variables_to_test": variables,
-                    "change_percentage": float(change_pct),
-                    "discount_rate": float(discount_rate),
-                }
-                try:
-                    with st.spinner("Running sensitivity..."):
-                        response = api_post("/top_rank_sensitivity", json=payload)
-                    st.session_state["top_rank_results"] = response
-                    st.success(response.get("message", "Sensitivity completed."))
-                except RuntimeError as exc:
-                    st.error(str(exc))
-
-        results = st.session_state.get("top_rank_results")
-        if results:
-            render_table("Sensitivity results", results.get("sensitivity_results"))
-            insights = results.get("sensitivity_insights")
-            if insights:
-                st.subheader("Insights")
-                for item in insights:
-                    st.write(f"• {item}")
-
-        with st.form("what_if_form"):
-            st.subheader("What-if adjustments")
-            num_adjustments = st.number_input("Number of adjustments", min_value=1, max_value=5, value=1, step=1)
-            adjustments: List[Dict[str, Any]] = []
-            for idx in range(int(num_adjustments)):
-                col1, col2, col3 = st.columns(3)
-                year = col1.number_input(f"Year #{idx + 1}", value=2025, step=1, key=f"what_if_year_{idx}")
-                variable = col2.selectbox(
-                    f"Variable #{idx + 1}",
-                    options=WHAT_IF_VARIABLES,
-                    key=f"what_if_var_{idx}",
-                )
-                multiplier = col3.number_input(
-                    f"Multiplier #{idx + 1}",
-                    value=1.1,
-                    step=0.05,
-                    key=f"what_if_multiplier_{idx}",
-                )
-                adjustments.append({"year": int(year), "variable": variable, "multiplier": float(multiplier)})
-            discount_rate = st.number_input("Discount rate", value=0.2, step=0.01)
-            run_what_if = st.form_submit_button("Apply what-if")
-            if run_what_if:
-                payload = {
-                    "num_adjustments": len(adjustments),
-                    "adjustments": adjustments,
-                    "discount_rate": float(discount_rate),
-                }
-                try:
-                    with st.spinner("Applying what-if adjustments..."):
-                        response = api_post("/what_if", json=payload)
-                    st.session_state["what_if_results"] = response
-                    st.success(response.get("message", "What-if complete."))
-                except RuntimeError as exc:
-                    st.error(str(exc))
-
-        what_if_results = st.session_state.get("what_if_results")
-        if what_if_results:
-            render_table("What-if results", what_if_results.get("results"))
-            warnings = what_if_results.get("warnings")
-            if warnings:
-                st.warning("\n".join(warnings))
-
-        with st.form("goal_seek_form"):
-            st.subheader("Goal seek")
-            target_profit_margin = st.number_input("Target profit margin (decimal)", value=0.1, step=0.01)
-            variable_to_adjust = st.selectbox("Driver to adjust", GOAL_SEEK_VARIABLES)
-            year_to_adjust = st.number_input("Year", value=2025, step=1)
-            max_iterations = st.number_input("Max iterations", value=100, min_value=1, step=1)
-            tolerance = st.number_input("Tolerance", value=0.001, min_value=0.0001, step=0.0001, format="%.4f")
-            discount_rate = st.number_input("Discount rate", value=0.1, step=0.01)
-            run_goal_seek = st.form_submit_button("Run goal seek")
-            if run_goal_seek:
-                payload = {
-                    "target_profit_margin": float(target_profit_margin),
-                    "variable_to_adjust": variable_to_adjust,
-                    "year_to_adjust": int(year_to_adjust),
-                    "max_iterations": int(max_iterations),
-                    "tolerance": float(tolerance),
-                    "discount_rate": float(discount_rate),
-                }
-                try:
-                    with st.spinner("Running goal seek..."):
-                        response = api_post("/goal_seek", json=payload)
-                    st.session_state["goal_seek_results"] = response
-                    st.success(response.get("message", "Goal seek completed."))
-                except RuntimeError as exc:
-                    st.error(str(exc))
-
-        goal_seek_results = st.session_state.get("goal_seek_results")
-        if goal_seek_results:
-            render_table("Goal seek results", goal_seek_results.get("results"))
-            st.json(goal_seek_results)
+        )
+        bars.update_layout(
+            title="Sensitivity comparison",
+            yaxis=dict(title="Projected value", tickprefix="$", separatethousands=True),
+            xaxis=dict(tickangle=-45),
+        )
+        st.plotly_chart(bars, use_container_width=True)
 
 
 def render_advanced_tab(tab: st.delta_generator.DeltaGenerator) -> None:
     with tab:
-        st.header("Advanced analytics & exports")
-        st.write(
-            "Run Monte Carlo simulations, schedule risk, neural predictions, statistical"
-            " forecasts, and budget optimizations. Download the consolidated Excel report"
-            " for offline review."
-        )
+        st.header("Advanced analysis")
+        st.write("Review valuation signals calculated directly from your manual assumptions.")
 
-        if st.button("Download Excel report"):
-            try:
-                with st.spinner("Preparing Excel report..."):
-                    content = api_get("/export_excel")
-                st.download_button(
-                    label="Save Excel report",
-                    data=content,
-                    file_name="ecommerce_report.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        results = st.session_state.get("model_results")
+        if not results:
+            st.info("Apply assumptions on the Input tab to generate valuation insights.")
+            return
+
+        npv_value = results.get("npv", 0.0)
+        payback_year = results.get("payback_year")
+        cashflow_df: pd.DataFrame = results.get("cashflow", pd.DataFrame())
+
+        col1, col2 = st.columns(2)
+        col1.metric("Net Present Value", f"${npv_value:,.0f}")
+        payback_text = str(payback_year) if payback_year else "Not achieved"
+        col2.metric("Payback year", payback_text)
+
+        if not cashflow_df.empty:
+            cumulative_fig = go.Figure()
+            cumulative_fig.add_trace(
+                go.Scatter(
+                    name="Ending Cash",
+                    x=cashflow_df["Year"],
+                    y=cashflow_df["Ending Cash"],
+                    mode="lines+markers",
+                    marker=dict(color="#0ea5e9"),
                 )
-            except RuntimeError as exc:
-                st.error(str(exc))
-
-        with st.form("monte_carlo_form"):
-            st.subheader("Monte Carlo simulation")
-            forecast_years = st.number_input("Forecast years", value=5, min_value=1, max_value=20, step=1)
-            num_simulations = st.number_input("Number of simulations", value=1000, min_value=100, step=100)
-            confidence_level = st.slider("Confidence level", min_value=80, max_value=99, value=90, step=1)
-            distribution_type = st.selectbox(
-                "Distribution type",
-                [
-                    "Normal",
-                    "Lognormal",
-                    "Uniform",
-                    "Exponential",
-                    "Binomial",
-                    "Poisson",
-                    "Geometric",
-                    "Bernoulli",
-                    "Chi-square",
-                    "Gamma",
-                    "Weibull",
-                    "Hypergeometric",
-                    "Multinomial",
-                    "Beta",
-                    "F-distribution",
-                    "Discrete",
-                    "Continuous",
-                    "Cumulative",
-                ],
             )
-            discount_rate = st.number_input("Discount rate (%)", value=10.0, step=0.5)
-            wacc = st.number_input("WACC (%)", value=10.0, step=0.5)
-            perpetual_growth = st.number_input("Perpetual growth (%)", value=2.0, step=0.5)
-            run_monte_carlo = st.form_submit_button("Run simulation")
-            if run_monte_carlo:
-                payload = {
-                    "forecast_years": int(forecast_years),
-                    "num_simulations": int(num_simulations),
-                    "confidence_level": float(confidence_level),
-                    "distribution_type": distribution_type,
-                    "discount_rate": float(discount_rate),
-                    "wacc": float(wacc),
-                    "perpetual_growth": float(perpetual_growth),
-                }
-                try:
-                    with st.spinner("Running Monte Carlo simulation..."):
-                        response = api_post("/monte_carlo", json=payload)
-                    st.session_state["monte_carlo"] = response
-                    st.success("Monte Carlo simulation complete.")
-                except RuntimeError as exc:
-                    st.error(str(exc))
+            cumulative_fig.update_layout(
+                title="Cumulative cash position",
+                yaxis=dict(title="Cash", tickprefix="$", separatethousands=True),
+            )
+            st.plotly_chart(cumulative_fig, use_container_width=True)
 
-        monte_carlo = st.session_state.get("monte_carlo")
-        if monte_carlo:
-            st.subheader("Monte Carlo metrics")
-            st.json(monte_carlo)
-
-        with st.form("schedule_risk_form"):
-            st.subheader("Schedule risk analysis")
-            num_simulations = st.number_input("Number of simulations", value=1000, min_value=100, step=100)
-            confidence_level = st.slider("Confidence level (%)", min_value=80, max_value=99, value=90, step=1)
-            run_schedule_risk = st.form_submit_button("Run schedule risk")
-            if run_schedule_risk:
-                payload = {
-                    "num_simulations": int(num_simulations),
-                    "confidence_level": float(confidence_level),
-                }
-                try:
-                    with st.spinner("Running schedule risk analysis..."):
-                        response = api_post("/schedule_risk_analysis", json=payload)
-                    st.session_state["schedule_risk"] = response
-                    st.success("Schedule risk analysis complete.")
-                except RuntimeError as exc:
-                    st.error(str(exc))
-
-        schedule_risk = st.session_state.get("schedule_risk")
-        if schedule_risk:
-            st.subheader("Schedule risk results")
-            st.json(schedule_risk)
-
-        with st.form("neural_tools_form"):
-            st.subheader("Neural tools forecast")
-            traffic_increase = st.number_input("Traffic increase (%)", value=5.0, step=0.5)
-            run_neural = st.form_submit_button("Run neural prediction")
-            if run_neural:
-                payload = {"traffic_increase_percentage": float(traffic_increase)}
-                try:
-                    with st.spinner("Running neural prediction..."):
-                        response = api_post("/neural_tools", json=payload)
-                    st.session_state["neural_tools"] = response
-                    st.success("Neural tools prediction ready.")
-                except RuntimeError as exc:
-                    st.error(str(exc))
-
-        neural_tools = st.session_state.get("neural_tools")
-        if neural_tools:
-            st.subheader("Neural tools output")
-            st.json(neural_tools)
-
-        with st.form("stat_tools_form"):
-            st.subheader("Statistical forecasting")
-            forecast_years = st.number_input("Forecast years", value=5, min_value=1, max_value=20, step=1)
-            confidence_level = st.slider("Confidence level", min_value=80, max_value=99, value=90, step=1, key="stat_confidence")
-            run_stat = st.form_submit_button("Run forecasting")
-            if run_stat:
-                payload = {
-                    "forecast_years": int(forecast_years),
-                    "confidence_level": float(confidence_level),
-                }
-                try:
-                    with st.spinner("Running statistical forecast..."):
-                        response = api_post("/stat_tools_forecasting", json=payload)
-                    st.session_state["stat_tools"] = response
-                    st.success("Statistical forecasting ready.")
-                except RuntimeError as exc:
-                    st.error(str(exc))
-
-        stat_tools = st.session_state.get("stat_tools")
-        if stat_tools:
-            st.subheader("Forecasting output")
-            st.json(stat_tools)
-
-        with st.form("evolver_form"):
-            st.subheader("Budget optimization (Evolver)")
-            budget_line = st.selectbox("Budget line", BUDGET_LINES)
-            budget_value = st.number_input("Budget amount", value=100000.0, min_value=0.0, step=1000.0)
-            forecast_years = st.number_input("Forecast years", value=5, min_value=1, max_value=20, step=1)
-            run_evolver = st.form_submit_button("Run optimization")
-            if run_evolver:
-                payload = {
-                    "budget_dict": {budget_line: float(budget_value)},
-                    "forecast_years": int(forecast_years),
-                }
-                try:
-                    with st.spinner("Running optimization..."):
-                        response = api_post("/evolver_optimization", json=payload)
-                    st.session_state["evolver"] = response
-                    st.success("Optimization completed.")
-                except RuntimeError as exc:
-                    st.error(str(exc))
-
-        evolver = st.session_state.get("evolver")
-        if evolver:
-            st.subheader("Optimization results")
-            st.json(evolver)
-
-        if st.button("Run precision tree analysis"):
-            try:
-                with st.spinner("Generating precision tree..."):
-                    response = api_get("/precision_tree")
-                st.session_state["precision_tree"] = response
-                st.success("Precision tree generated.")
-            except RuntimeError as exc:
-                st.error(str(exc))
-
-        precision_tree = st.session_state.get("precision_tree")
-        if precision_tree:
-            st.subheader("Precision tree output")
-            st.json({k: v for k, v in precision_tree.items() if k != "decision_tree_image"})
-            image_data = precision_tree.get("decision_tree_image")
-            if image_data:
-                try:
-                    st.image(base64.b64decode(image_data), caption="Decision tree")
-                except (ValueError, TypeError):
-                    st.warning("Unable to decode decision tree image.")
-
-
-# ---------------------------------------------------------------------------
-# Main entry point
-# ---------------------------------------------------------------------------
+        st.write(
+            "These metrics use a simplified valuation approach (NPV based on annual net cash"
+            " flows and the prevailing interest rate from the Financing schedule)."
+        )
 
 
 def main() -> None:
