@@ -52,7 +52,57 @@ CHANNEL_DEFINITIONS = [
 ]
 SENSITIVITY_STEPS = [-0.1, -0.05, 0.05, 0.1]
 
-DEFAULT_ASSUMPTION_YEARS = [2023, 2024, 2025, 2026, 2027]
+DEFAULT_PRODUCTION_START_YEAR = 2023
+DEFAULT_PRODUCTION_END_YEAR = 2027
+PRODUCTION_YEAR_CHOICES = list(range(2000, 2101))
+
+
+def default_production_years() -> List[int]:
+    return list(range(DEFAULT_PRODUCTION_START_YEAR, DEFAULT_PRODUCTION_END_YEAR + 1))
+
+
+def get_production_horizon() -> Tuple[int, int]:
+    start_raw = st.session_state.get("production_start_year", DEFAULT_PRODUCTION_START_YEAR)
+    end_raw = st.session_state.get("production_end_year", DEFAULT_PRODUCTION_END_YEAR)
+    try:
+        start_year = int(start_raw)
+    except (TypeError, ValueError):
+        start_year = DEFAULT_PRODUCTION_START_YEAR
+    try:
+        end_year = int(end_raw)
+    except (TypeError, ValueError):
+        end_year = DEFAULT_PRODUCTION_END_YEAR
+    if end_year < start_year:
+        end_year = start_year
+    return start_year, end_year
+
+
+def get_production_years() -> List[int]:
+    start_year, end_year = get_production_horizon()
+    return list(range(start_year, end_year + 1))
+
+
+def set_production_horizon(start_year: int, end_year: int) -> None:
+    try:
+        start = int(start_year)
+    except (TypeError, ValueError):
+        start = DEFAULT_PRODUCTION_START_YEAR
+    try:
+        end = int(end_year)
+    except (TypeError, ValueError):
+        end = DEFAULT_PRODUCTION_END_YEAR
+    if end < start:
+        end = start
+    years = list(range(start, end + 1))
+    if not years:
+        years = default_production_years()
+    st.session_state["production_start_year"] = years[0]
+    st.session_state["production_end_year"] = years[-1]
+    st.session_state["assumption_years"] = years
+    tables: Dict[str, pd.DataFrame] = st.session_state.get("assumption_tables", {})
+    synced = sync_schedule_years(years, tables)
+    st.session_state["assumption_tables"] = synced
+    refresh_model_from_assumptions(synced)
 EXECUTIVE_ROLES = [
     "CEO Salary",
     "COO Salary",
@@ -467,6 +517,11 @@ def _parse_edit_value(column: str, text_value: str) -> Any:
             year_value = int(float(cleaned))
         except (TypeError, ValueError):
             return cleaned
+        start_year, end_year = get_production_horizon()
+        if year_value < start_year:
+            year_value = start_year
+        if year_value > end_year:
+            year_value = end_year
         return year_value
     numeric_candidate = pd.to_numeric(pd.Series([cleaned]), errors="coerce").iloc[0]
     if pd.isna(numeric_candidate):
@@ -526,94 +581,41 @@ def _apply_incremental_fill(
     return working
 
 
-def collect_all_years(tables: Dict[str, pd.DataFrame]) -> List[int]:
-    observed: Set[int] = set()
-    for frame in tables.values():
-        if frame is None or not isinstance(frame, pd.DataFrame):
-            continue
-        if "Year" not in frame.columns:
-            continue
-        observed.update(_normalize_year_list(frame["Year"].tolist()))
-    return sorted(observed)
-
-
 def ensure_assumption_tables() -> None:
+    if "production_start_year" not in st.session_state:
+        st.session_state["production_start_year"] = DEFAULT_PRODUCTION_START_YEAR
+    if "production_end_year" not in st.session_state:
+        st.session_state["production_end_year"] = DEFAULT_PRODUCTION_END_YEAR
     if "assumption_tables" not in st.session_state:
-        st.session_state["assumption_years"] = DEFAULT_ASSUMPTION_YEARS.copy()
+        years = get_production_years() or default_production_years()
+        st.session_state["assumption_years"] = years
         initial_tables = {
-            schedule["name"]: create_blank_schedule(
-                schedule["columns"], st.session_state["assumption_years"]
-            )
+            schedule["name"]: create_blank_schedule(schedule["columns"], years)
             for schedule in ASSUMPTION_SCHEDULES
         }
-        st.session_state["assumption_tables"] = sync_schedule_years(
-            st.session_state["assumption_years"], initial_tables
-        )
+        st.session_state["assumption_tables"] = sync_schedule_years(years, initial_tables)
         refresh_model_from_assumptions(st.session_state["assumption_tables"])
 
 
 def get_assumption_years() -> List[int]:
-    if years := st.session_state.get("assumption_years"):
-        return years
-    tables: Dict[str, pd.DataFrame] = st.session_state.get("assumption_tables", {})
-    collected: List[int] = []
-    for frame in tables.values():
-        if frame is None or frame.empty or "Year" not in frame.columns:
-            continue
-        collected.extend(_normalize_year_list(frame["Year"].tolist()))
-    if not collected:
-        collected = DEFAULT_ASSUMPTION_YEARS.copy()
-    st.session_state["assumption_years"] = collected
-    return collected
-
-
-def add_assumption_year(year: int) -> None:
-    current_years = _normalize_year_list(get_assumption_years())
-    if year not in current_years:
-        current_years.append(year)
-    tables: Dict[str, pd.DataFrame] = st.session_state.get("assumption_tables", {})
-    updated_tables: Dict[str, pd.DataFrame] = {}
-    for schedule in ASSUMPTION_SCHEDULES:
-        frame = tables.get(schedule["name"])
-        columns = schedule["columns"]
-        new_row = {column: None for column in columns}
-        if "Year" in new_row:
-            new_row["Year"] = year
-        if frame is None or frame.empty:
-            updated_tables[schedule["name"]] = pd.DataFrame([new_row], columns=columns)
-            continue
-        working = frame.copy()
-        if "Year" not in working.columns:
-            working.insert(0, "Year", [None] * len(working))
-        working["Year"] = pd.to_numeric(working["Year"], errors="coerce")
-        existing_years = _normalize_year_list(working["Year"].tolist())
-        if year not in existing_years:
-            working = pd.concat([working, pd.DataFrame([new_row])], ignore_index=True)
-        updated_tables[schedule["name"]] = working
-    st.session_state["assumption_tables"] = sync_schedule_years(
-        sorted(set(current_years)), updated_tables
-    )
-
-
-def remove_assumption_year(year: int) -> None:
-    tables: Dict[str, pd.DataFrame] = st.session_state.get("assumption_tables", {})
-    cleaned: Dict[str, pd.DataFrame] = {}
-    for schedule in ASSUMPTION_SCHEDULES:
-        frame = tables.get(schedule["name"])
-        if frame is None or frame.empty:
-            cleaned[schedule["name"]] = frame
-            continue
-        frame = frame.copy()
-        if "Year" in frame.columns:
-            frame["Year"] = pd.to_numeric(frame["Year"], errors="coerce")
-            frame = frame[frame["Year"] != year]
-        cleaned[schedule["name"]] = frame
-    remaining_years = [value for value in collect_all_years(cleaned) if value != year]
-    st.session_state["assumption_tables"] = sync_schedule_years(remaining_years, cleaned)
+    years = st.session_state.get("assumption_years")
+    normalized = _normalize_year_list(years or [])
+    if normalized:
+        return normalized
+    production_years = get_production_years()
+    st.session_state["assumption_years"] = production_years
+    return production_years
 
 
 def reset_assumption_tables(years: Optional[Iterable[int]] = None) -> None:
-    base_years = _normalize_year_list(years or DEFAULT_ASSUMPTION_YEARS)
+    if years is not None:
+        base_years = _normalize_year_list(years)
+    else:
+        base_years = get_production_years()
+    if not base_years:
+        base_years = default_production_years()
+    st.session_state["production_start_year"] = base_years[0]
+    st.session_state["production_end_year"] = base_years[-1]
     st.session_state["assumption_years"] = base_years
     fresh_tables = {
         schedule["name"]: create_blank_schedule(schedule["columns"], base_years)
@@ -701,7 +703,11 @@ def set_assumptions_data(rows: List[Dict[str, Any]]) -> None:
     if not df.empty and "Year" in df.columns:
         years = _normalize_year_list(df["Year"].tolist())
     else:
-        years = DEFAULT_ASSUMPTION_YEARS.copy()
+        years = get_production_years()
+    if not years:
+        years = default_production_years()
+    st.session_state["production_start_year"] = years[0]
+    st.session_state["production_end_year"] = years[-1]
     st.session_state["assumptions_raw"] = rows
     st.session_state["assumption_years"] = years
     tables = split_assumptions_into_tables(df, years)
@@ -719,29 +725,36 @@ def sync_schedule_years(
     base_years: List[int], tables: Dict[str, pd.DataFrame]
 ) -> Dict[str, pd.DataFrame]:
     normalized_years = _normalize_year_list(base_years)
-    observed: Set[int] = set(normalized_years)
+    if not normalized_years:
+        normalized_years = default_production_years()
+    min_year, max_year = normalized_years[0], normalized_years[-1]
     synced: Dict[str, pd.DataFrame] = {}
     for schedule in ASSUMPTION_SCHEDULES:
         columns = schedule["columns"]
         frame = tables.get(schedule["name"])
-        if frame is None:
-            frame = create_blank_schedule(columns, normalized_years)
+        working = _coerce_schedule_frame(frame, columns)
+        if "Year" in working.columns:
+            working["Year"] = pd.to_numeric(working["Year"], errors="coerce")
+            working = working.dropna(subset=["Year"]).copy()
+            working = working[(working["Year"] >= min_year) & (working["Year"] <= max_year)]
+            working["Year"] = working["Year"].astype(int)
+            existing_years = _normalize_year_list(working["Year"].tolist())
         else:
-            frame = frame.copy()
-            if "Year" in frame.columns:
-                frame["Year"] = pd.to_numeric(frame["Year"], errors="coerce")
-                observed.update(_normalize_year_list(frame["Year"].tolist()))
-            else:
-                frame.insert(0, "Year", [None] * len(frame))
-            for column in columns:
-                if column not in frame.columns:
-                    frame[column] = None
-            frame = frame[columns]
-        synced[schedule["name"]] = frame.reset_index(drop=True)
-    final_years = sorted(year for year in observed if year is not None)
-    if not final_years:
-        final_years = normalized_years or DEFAULT_ASSUMPTION_YEARS.copy()
-    st.session_state["assumption_years"] = final_years
+            existing_years = []
+        missing_years = [year for year in normalized_years if year not in existing_years]
+        if missing_years and "Year" in working.columns:
+            blanks = pd.DataFrame(
+                [{column: None for column in columns} for _ in missing_years],
+                columns=columns,
+            )
+            blanks["Year"] = missing_years
+            working = pd.concat([working, blanks], ignore_index=True)
+        if "Year" in working.columns:
+            working = working.sort_values("Year", kind="mergesort").reset_index(drop=True)
+        synced[schedule["name"]] = working.reset_index(drop=True)
+    st.session_state["assumption_years"] = normalized_years
+    st.session_state["production_start_year"] = normalized_years[0]
+    st.session_state["production_end_year"] = normalized_years[-1]
     return apply_derived_assumption_values(synced)
 
 
@@ -787,6 +800,7 @@ def rows_for_year(frame: pd.DataFrame, year: int) -> pd.DataFrame:
 
 def sanitize_tables(tables: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
     sanitized: Dict[str, pd.DataFrame] = {}
+    start_year, end_year = get_production_horizon()
     for schedule in ASSUMPTION_SCHEDULES:
         frame = tables.get(schedule["name"])
         if frame is None:
@@ -795,6 +809,7 @@ def sanitize_tables(tables: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
         if "Year" in frame.columns:
             frame["Year"] = pd.to_numeric(frame["Year"], errors="coerce")
             frame = frame.dropna(subset=["Year"]).copy()
+            frame = frame[(frame["Year"] >= start_year) & (frame["Year"] <= end_year)]
             frame["Year"] = frame["Year"].astype(int)
         sanitized[schedule["name"]] = frame
     return sanitized
@@ -1432,7 +1447,7 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
 
     years = gather_years(sanitized)
     if not years:
-        years = DEFAULT_ASSUMPTION_YEARS.copy()
+        years = get_assumption_years()
     if not debt_amortization_df.empty:
         amort_years = [
             int(year)
@@ -2490,54 +2505,63 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
 
         ensure_assumption_tables()
 
-        st.subheader("Edit assumptions")
+        st.subheader("Production horizon")
         st.caption(
-            "Populate each schedule below to rebuild the model inputs manually. "
-            "The Demand & Conversion table controls the forecast years—add or remove years "
-            "there and the remaining schedules will stay in sync."
+            "Select the start and end years for the production horizon. All assumption "
+            "schedules and downstream dashboards stay within this range."
         )
 
         current_years = get_assumption_years()
-        add_col, remove_col, reset_col = st.columns([2, 2, 1])
-        with add_col:
-            default_year = (current_years[-1] + 1) if current_years else 2023
-            new_year_value = st.number_input(
-                "New forecast year",
-                value=default_year,
-                step=1,
-                key="assumptions_add_year",
+        if not current_years:
+            current_years = default_production_years()
+        current_start = current_years[0]
+        current_end = current_years[-1]
+        min_option = min(PRODUCTION_YEAR_CHOICES[0], current_start, current_end)
+        max_option = max(PRODUCTION_YEAR_CHOICES[-1], current_start, current_end)
+        year_options = list(range(min_option, max_option + 1))
+
+        start_col, end_col, reset_col = st.columns([2, 2, 1])
+        with start_col:
+            start_index = year_options.index(current_start) if current_start in year_options else 0
+            selected_start = st.selectbox(
+                "Start year",
+                year_options,
+                index=start_index,
+                key="production_start_select",
             )
-            if st.button("Add year", use_container_width=True, key="assumptions_add_year_btn"):
-                add_assumption_year(int(new_year_value))
-        with remove_col:
-            if current_years:
-                remove_choice = st.selectbox(
-                    "Remove forecast year",
-                    current_years,
-                    key="assumptions_remove_year",
-                )
-                if st.button(
-                    "Remove year", use_container_width=True, key="assumptions_remove_year_btn"
-                ):
-                    remove_assumption_year(int(remove_choice))
-            else:
-                st.selectbox(
-                    "Remove forecast year",
-                    ["No years available"],
-                    disabled=True,
-                    key="assumptions_remove_year_disabled",
-                )
-                st.button(
-                    "Remove year",
-                    use_container_width=True,
-                    disabled=True,
-                    key="assumptions_remove_year_btn_disabled",
-                )
+        with end_col:
+            end_options = [year for year in year_options if year >= selected_start]
+            if not end_options:
+                end_options = [selected_start]
+            adjusted_end = current_end if current_end >= selected_start else selected_start
+            end_index = (
+                end_options.index(adjusted_end)
+                if adjusted_end in end_options
+                else len(end_options) - 1
+            )
+            selected_end = st.selectbox(
+                "End year",
+                end_options,
+                index=end_index,
+                key="production_end_select",
+            )
         with reset_col:
             st.write("")
             st.write("")
-            if st.button("Reset", use_container_width=True, key="assumptions_reset_btn"):
-                reset_assumption_tables()
+            if st.button("Reset tables", use_container_width=True, key="assumptions_reset_btn"):
+                reset_assumption_tables(list(range(selected_start, selected_end + 1)))
+                current_years = get_assumption_years()
+                selected_start, selected_end = get_production_horizon()
+
+        if selected_start != current_start or selected_end != current_end:
+            set_production_horizon(selected_start, selected_end)
+            current_years = get_assumption_years()
+
+        st.subheader("Edit assumptions")
+        st.caption(
+            "Populate each schedule below to rebuild the model inputs manually. The tables "
+            "stay aligned with the production horizon above."
+        )
 
         tables: Dict[str, pd.DataFrame] = st.session_state.get("assumption_tables", {})
         schedule_tabs = st.tabs([schedule["name"] for schedule in ASSUMPTION_SCHEDULES])
@@ -2649,11 +2673,21 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                             elif current_years:
                                 suggested_year = current_years[0]
                             else:
-                                suggested_year = 2023
+                                suggested_year = default_production_years()[0]
+                            if current_years:
+                                min_year = current_years[0]
+                                max_year = current_years[-1]
+                            else:
+                                horizon_default = default_production_years()
+                                min_year = horizon_default[0]
+                                max_year = horizon_default[-1]
+                            suggested_year = max(min(int(suggested_year), max_year), min_year)
                             new_row_year = st.number_input(
                                 "Year for new row",
                                 value=int(suggested_year),
                                 step=1,
+                                min_value=int(min_year),
+                                max_value=int(max_year),
                                 key=f"{editor_key}_new_row_year",
                             )
                         else:
@@ -2852,12 +2886,7 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
             st.session_state[data_state_key] = updated.copy()
             updated_tables[schedule["name"]] = updated
 
-        combined_years = collect_all_years(updated_tables)
-        base_years = (
-            combined_years
-            if combined_years
-            else (st.session_state.get("assumption_years") or current_years)
-        )
+        base_years = get_assumption_years()
         computed_tables = sync_schedule_years(base_years, updated_tables)
         st.session_state["assumption_tables"] = computed_tables
         for schedule in ASSUMPTION_SCHEDULES:

@@ -117,6 +117,11 @@ console or the Streamlit app.
    outlines the best way to edit each line item so you know which fields to
    tweak when assumptions change.
 
+4. Use the **Production horizon** selectors at the top of the Input &
+   Assumptions tab to choose the start and end years for the model. All
+   schedules, statements, and analytics stay within that range, so forecasts no
+   longer extend beyond your selected production horizon.
+
 #### Showing asset additions in Streamlit
 
 - Navigate to **Input & Assumptions → Asset Register** and add a row for each
