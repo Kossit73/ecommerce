@@ -706,7 +706,9 @@ def rows_for_year(frame: pd.DataFrame, year: int) -> pd.DataFrame:
 def sanitize_tables(tables: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
     sanitized: Dict[str, pd.DataFrame] = {}
     for schedule in ASSUMPTION_SCHEDULES:
-        frame = tables.get(schedule["name"]) or pd.DataFrame(columns=schedule["columns"])
+        frame = tables.get(schedule["name"])
+        if frame is None:
+            frame = pd.DataFrame(columns=schedule["columns"])
         frame = _coerce_schedule_frame(frame, schedule["columns"])
         if "Year" in frame.columns:
             frame["Year"] = pd.to_numeric(frame["Year"], errors="coerce")
