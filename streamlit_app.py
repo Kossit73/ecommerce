@@ -45,6 +45,13 @@ CHANNEL_DEFINITIONS = [
 SENSITIVITY_STEPS = [-0.1, -0.05, 0.05, 0.1]
 
 DEFAULT_ASSUMPTION_YEARS = [2023, 2024, 2025, 2026, 2027]
+EXECUTIVE_ROLES = [
+    "CEO Salary",
+    "COO Salary",
+    "CFO Salary",
+    "Director of HR Salary",
+    "CIO Salary",
+]
 ASSUMPTION_SCHEDULES: List[Dict[str, Any]] = [
     {
         "name": "Demand & Conversion",
@@ -620,6 +627,12 @@ def set_assumptions_data(rows: List[Dict[str, Any]]) -> None:
     st.session_state["assumption_tables"] = sync_schedule_years(years, tables)
 
 
+def _build_editor_key(name: str) -> str:
+    return "assumptions_" + "".join(
+        char.lower() if char.isalnum() else "_" for char in name
+    )
+
+
 def sync_schedule_years(
     base_years: List[int], tables: Dict[str, pd.DataFrame]
 ) -> Dict[str, pd.DataFrame]:
@@ -647,7 +660,7 @@ def sync_schedule_years(
     if not final_years:
         final_years = normalized_years or DEFAULT_ASSUMPTION_YEARS.copy()
     st.session_state["assumption_years"] = final_years
-    return synced
+    return apply_derived_assumption_values(synced)
 
 
 def to_number(value: Any, default: Optional[float] = 0.0) -> Optional[float]:
@@ -709,6 +722,129 @@ def gather_years(tables: Dict[str, pd.DataFrame]) -> List[int]:
         if "Year" in frame.columns:
             years.update(int(year) for year in frame["Year"] if pd.notna(year))
     return sorted(years)
+
+
+def _sum_for_year(frame: Optional[pd.DataFrame], year: int, column: str) -> float:
+    if frame is None or column not in frame.columns:
+        return 0.0
+    working = frame.copy()
+    if "Year" in working.columns:
+        years = pd.to_numeric(working["Year"], errors="coerce")
+        working = working.loc[years == year]
+    if working.empty:
+        return 0.0
+    values = pd.to_numeric(working[column], errors="coerce")
+    return float(values.fillna(0.0).sum())
+
+
+def _apply_staffing_totals(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    working = frame.copy()
+    for prefix in ["Direct Staff", "Indirect Staff", "Part-Time Staff"]:
+        hours_col = f"{prefix} Hours per Year"
+        number_col = f"{prefix} Number"
+        rate_col = f"{prefix} Hourly Rate"
+        total_col = f"{prefix} Total Cost"
+        required = [hours_col, number_col, rate_col, total_col]
+        if not all(col in working.columns for col in required):
+            continue
+        hours = pd.to_numeric(working[hours_col], errors="coerce")
+        headcount = pd.to_numeric(working[number_col], errors="coerce")
+        rate = pd.to_numeric(working[rate_col], errors="coerce")
+        total = hours * headcount * rate
+        working[total_col] = total.round(2)
+    return working
+
+
+BENEFIT_TOTAL_COLUMNS = [
+    ("Pension Cost per Staff", "Pension Total Cost"),
+    ("Medical Insurance Cost per Staff", "Medical Insurance Total Cost"),
+    ("Child Benefit Cost per Staff", "Child Benefit Total Cost"),
+    ("Car Benefit Cost per Staff", "Car Benefit Total Cost"),
+]
+
+
+def _count_executives_for_year(executives: Optional[pd.DataFrame], year: int) -> float:
+    if executives is None or executives.empty:
+        return 0.0
+    if "Year" in executives.columns:
+        years = pd.to_numeric(executives["Year"], errors="coerce")
+        filtered = executives.loc[years == year]
+    else:
+        filtered = executives.copy()
+    if filtered.empty:
+        return 0.0
+    count = 0.0
+    for column in EXECUTIVE_ROLES:
+        if column not in filtered.columns:
+            continue
+        series = filtered[column]
+        if series.notna().any():
+            count += 1.0
+    return count
+
+
+def _apply_benefit_totals(
+    benefits: pd.DataFrame,
+    staffing: Optional[pd.DataFrame],
+    executives: Optional[pd.DataFrame],
+) -> pd.DataFrame:
+    if benefits.empty:
+        return benefits
+    working = benefits.copy()
+    years = pd.to_numeric(working.get("Year"), errors="coerce") if "Year" in working else None
+    for idx in working.index:
+        year_value = None if years is None else years.iloc[idx]
+        if year_value is None or pd.isna(year_value):
+            total_staff = None
+        else:
+            year_int = int(year_value)
+            direct = _sum_for_year(staffing, year_int, "Direct Staff Number")
+            indirect = _sum_for_year(staffing, year_int, "Indirect Staff Number")
+            exec_count = _count_executives_for_year(executives, year_int)
+            total_staff = direct + indirect + exec_count
+        for per_cost_col, total_col in BENEFIT_TOTAL_COLUMNS:
+            if per_cost_col not in working.columns or total_col not in working.columns:
+                continue
+            per_cost = to_number(working.at[idx, per_cost_col], None)
+            if per_cost is None or total_staff is None:
+                working.at[idx, total_col] = None
+            else:
+                working.at[idx, total_col] = round(per_cost * total_staff, 2)
+        totals: List[float] = []
+        for _, total_col in BENEFIT_TOTAL_COLUMNS:
+            if total_col not in working.columns:
+                continue
+            value = to_number(working.at[idx, total_col], None)
+            if value is not None:
+                totals.append(value)
+        if "Total Benefits" in working.columns:
+            working.at[idx, "Total Benefits"] = (
+                round(sum(totals), 2) if totals else None
+            )
+    return working
+
+
+def apply_derived_assumption_values(
+    tables: Dict[str, pd.DataFrame]
+) -> Dict[str, pd.DataFrame]:
+    derived: Dict[str, pd.DataFrame] = {}
+    for schedule in ASSUMPTION_SCHEDULES:
+        frame = tables.get(schedule["name"])
+        derived[schedule["name"]] = frame.copy() if isinstance(frame, pd.DataFrame) else frame
+    staffing = derived.get("Staffing Levels")
+    if isinstance(staffing, pd.DataFrame):
+        derived["Staffing Levels"] = _apply_staffing_totals(staffing)
+    executives = derived.get("Executive Compensation")
+    benefits = derived.get("Employee Benefits")
+    if isinstance(benefits, pd.DataFrame):
+        derived["Employee Benefits"] = _apply_benefit_totals(
+            benefits,
+            derived.get("Staffing Levels"),
+            executives if isinstance(executives, pd.DataFrame) else None,
+        )
+    return derived
 
 
 def _calculate_staff_cost(frame: pd.DataFrame, prefix: str) -> float:
@@ -1315,10 +1451,34 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                     format="%d",
                     disabled=False,
                 )
+                if schedule["name"] == "Staffing Levels":
+                    for total_col in [
+                        "Direct Staff Total Cost",
+                        "Indirect Staff Total Cost",
+                        "Part-Time Staff Total Cost",
+                    ]:
+                        if total_col in schedule["columns"]:
+                            column_config[total_col] = st.column_config.NumberColumn(
+                                total_col,
+                                format="$%0.2f",
+                                disabled=True,
+                            )
+                if schedule["name"] == "Employee Benefits":
+                    for total_col in [
+                        "Pension Total Cost",
+                        "Medical Insurance Total Cost",
+                        "Child Benefit Total Cost",
+                        "Car Benefit Total Cost",
+                        "Total Benefits",
+                    ]:
+                        if total_col in schedule["columns"]:
+                            column_config[total_col] = st.column_config.NumberColumn(
+                                total_col,
+                                format="$%0.2f",
+                                disabled=True,
+                            )
 
-            editor_key = "assumptions_" + "".join(
-                char.lower() if char.isalnum() else "_" for char in schedule["name"]
-            )
+            editor_key = _build_editor_key(schedule["name"])
             data_state_key = f"{editor_key}_table"
             edit_state_key = f"{editor_key}_active_edit"
             if edit_state_key not in st.session_state:
@@ -1578,7 +1738,15 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
             if combined_years
             else (st.session_state.get("assumption_years") or current_years)
         )
-        st.session_state["assumption_tables"] = sync_schedule_years(base_years, updated_tables)
+        computed_tables = sync_schedule_years(base_years, updated_tables)
+        st.session_state["assumption_tables"] = computed_tables
+        for schedule in ASSUMPTION_SCHEDULES:
+            editor_key = _build_editor_key(schedule["name"])
+            data_state_key = f"{editor_key}_table"
+            if data_state_key in st.session_state:
+                st.session_state[data_state_key] = (
+                    computed_tables.get(schedule["name"], pd.DataFrame()).copy()
+                )
 
         if st.button("Apply assumptions", type="primary"):
             combined_df = combine_assumption_tables(st.session_state["assumption_tables"])
