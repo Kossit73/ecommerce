@@ -931,17 +931,71 @@ def _apply_asset_depreciation(frame: pd.DataFrame) -> pd.DataFrame:
     if not all(column in frame.columns for column in required):
         return frame
     working = frame.copy()
-    for idx in working.index:
+
+    def _label(idx: Any) -> str:
+        if "Asset_1_Name" not in working.columns:
+            return f"asset_{idx}"
+        raw = working.at[idx, "Asset_1_Name"]
+        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+            return f"asset_{idx}"
+        label = str(raw).strip()
+        return label if label else f"asset_{idx}"
+
+    def _year_key(idx: Any) -> float:
+        if "Year" not in working.columns:
+            return float(idx) if isinstance(idx, (int, float)) else 0.0
+        raw_year = working.at[idx, "Year"]
+        try:
+            return float(int(float(raw_year)))
+        except (TypeError, ValueError):
+            return float("inf")
+
+    ordered_indices = sorted(
+        working.index,
+        key=lambda idx: (_label(idx).lower(), _year_key(idx), idx),
+    )
+
+    cumulative_by_asset: Dict[str, float] = {}
+    depreciation_results: Dict[Any, Optional[float]] = {}
+    nbv_results: Dict[Any, Optional[float]] = {}
+
+    for idx in ordered_indices:
+        asset_label = _label(idx)
+        previous_cumulative = cumulative_by_asset.get(asset_label, 0.0)
+
         amount = to_number(working.at[idx, "Asset_1_Amount"], None)
         rate = _normalize_rate(working.at[idx, "Asset_1_Rate"])
-        if amount is None or rate is None:
+
+        depreciation: Optional[float]
+        nbv: Optional[float]
+
+        if amount is None:
             depreciation = None
-            nbv = amount if amount is not None else None
+            nbv = None
         else:
-            depreciation = round(amount * rate, 2)
-            nbv = round(amount - depreciation, 2)
-        working.at[idx, "Asset_1_Depreciation"] = depreciation
-        working.at[idx, "Asset_1_NBV"] = nbv
+            if rate is None:
+                depreciation = None
+                nbv_value = amount - previous_cumulative
+            else:
+                depreciation = round(amount * rate, 2)
+                nbv_value = amount - depreciation - previous_cumulative
+            if nbv_value < 0:
+                nbv_value = 0.0
+            nbv = round(nbv_value, 2)
+
+        depreciation_results[idx] = depreciation
+        nbv_results[idx] = nbv
+
+        if depreciation is not None:
+            cumulative_by_asset[asset_label] = previous_cumulative + depreciation
+        else:
+            cumulative_by_asset[asset_label] = previous_cumulative
+
+    for idx, value in depreciation_results.items():
+        working.at[idx, "Asset_1_Depreciation"] = value
+    for idx, value in nbv_results.items():
+        working.at[idx, "Asset_1_NBV"] = value
+
     return working
 
 
