@@ -943,6 +943,117 @@ def build_discount_table(cash_flows: Sequence[float], rate: float) -> pd.DataFra
     return pd.DataFrame(rows)
 
 
+def build_debt_amortization_schedule(
+    debt_frame: pd.DataFrame,
+) -> Tuple[pd.DataFrame, Dict[int, Dict[str, float]]]:
+    if debt_frame.empty:
+        columns = [
+            "Year",
+            "Loan",
+            "Beginning Balance",
+            "Interest",
+            "Principal",
+            "Ending Balance",
+            "Payment",
+        ]
+        return pd.DataFrame(columns=columns), {}
+
+    schedule_rows: List[Dict[str, Any]] = []
+    aggregates: Dict[int, Dict[str, float]] = {}
+
+    for idx, row in debt_frame.iterrows():
+        start_year = row.get("Year")
+        amount = to_number(row.get("Debt_1_Amount"), None)
+        rate = _normalize_rate(row.get("Debt_1_Interest_Rate")) or 0.0
+        duration_raw = row.get("Debt_1_Duration")
+        try:
+            duration = int(float(duration_raw)) if duration_raw is not None else 0
+        except (TypeError, ValueError):
+            duration = 0
+
+        if start_year is None or amount in (None, 0) or duration <= 0:
+            continue
+
+        loan_name = row.get("Debt_1_Name") or f"Debt {idx + 1}"
+        balance = float(amount)
+
+        if rate:
+            payment = balance * rate / (1 - (1 + rate) ** (-duration))
+        else:
+            payment = balance / duration
+
+        for period in range(duration):
+            year = int(start_year) + period
+            beginning_balance = balance
+            interest = beginning_balance * rate if rate else 0.0
+            principal = payment - interest if rate else payment
+
+            if principal > balance or math.isclose(balance, principal, rel_tol=1e-9, abs_tol=1e-6):
+                principal = balance
+            ending_balance = balance - principal
+
+            # Guard against floating noise
+            if ending_balance < 1e-6:
+                ending_balance = 0.0
+
+            interest = round(interest, 2)
+            principal = round(principal, 2)
+            payment_value = round(interest + principal, 2)
+            beginning_balance = round(beginning_balance, 2)
+            ending_balance = round(ending_balance, 2)
+
+            schedule_rows.append(
+                {
+                    "Year": year,
+                    "Loan": str(loan_name),
+                    "Beginning Balance": beginning_balance,
+                    "Interest": interest,
+                    "Principal": principal,
+                    "Ending Balance": ending_balance,
+                    "Payment": payment_value,
+                }
+            )
+
+            year_totals = aggregates.setdefault(
+                year,
+                {
+                    "beginning": 0.0,
+                    "interest": 0.0,
+                    "principal": 0.0,
+                    "ending": 0.0,
+                    "issued": 0.0,
+                },
+            )
+            year_totals["beginning"] += beginning_balance
+            year_totals["interest"] += interest
+            year_totals["principal"] += principal
+            year_totals["ending"] += ending_balance
+            if period == 0:
+                year_totals["issued"] += beginning_balance
+
+            balance = ending_balance
+
+    schedule_df = pd.DataFrame(schedule_rows)
+    if schedule_df.empty:
+        return schedule_df, aggregates
+
+    schedule_df = schedule_df.sort_values(["Year", "Loan"]).reset_index(drop=True)
+
+    totals = (
+        schedule_df.groupby("Year")[
+            ["Beginning Balance", "Interest", "Principal", "Ending Balance", "Payment"]
+        ]
+        .sum()
+        .reset_index()
+    )
+    if not totals.empty:
+        totals.insert(1, "Loan", "Total")
+        schedule_df = pd.concat([schedule_df, totals], ignore_index=True)
+        schedule_df = schedule_df.sort_values(["Year", "Loan"]).reset_index(drop=True)
+
+    return schedule_df, aggregates
+
+
 def _safe_ratio(numerator: float, denominator: float) -> float:
     if denominator in (0, None) or (isinstance(denominator, float) and math.isclose(denominator, 0.0)):
         return 0.0
@@ -1010,9 +1121,20 @@ def goal_seek_margin(target_margin: float, base_revenue: float, base_margin: flo
 
 def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
     sanitized = sanitize_tables(tables)
+    debt_schedule = sanitized.get("Debt Schedule", pd.DataFrame())
+    debt_amortization_df, debt_totals = build_debt_amortization_schedule(debt_schedule)
+
     years = gather_years(sanitized)
     if not years:
         years = DEFAULT_ASSUMPTION_YEARS.copy()
+    if not debt_amortization_df.empty:
+        amort_years = [
+            int(year)
+            for year in debt_amortization_df["Year"].tolist()
+            if pd.notna(year)
+        ]
+        if amort_years:
+            years = sorted(set(years) | set(amort_years))
 
     summary_rows: List[Dict[str, Any]] = []
     performance_rows: List[Dict[str, Any]] = []
@@ -1051,7 +1173,7 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         property_df = rows_for_year(sanitized["Property Portfolio"], year)
         legal = rows_for_year(sanitized["Legal & Compliance"], year)
         assets = rows_for_year(sanitized["Asset Register"], year)
-        debt = rows_for_year(sanitized["Debt Schedule"], year)
+        debt_activity = debt_totals.get(year, {})
 
         total_traffic = 0.0
         total_orders = 0.0
@@ -1140,9 +1262,21 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         ebitda = gross_profit - operating_expenses
         ebit = ebitda - depreciation
 
-        interest_rate = to_decimal(avg_numeric(financing, "Interest Rate"))
-        debt_balance = sum_numeric(debt, "Debt_1_Amount")
-        interest_total = interest_expense + (debt_balance * interest_rate)
+        interest_rate_input = to_decimal(avg_numeric(financing, "Interest Rate"))
+        schedule_interest = debt_activity.get("interest", 0.0)
+        schedule_beginning = debt_activity.get("beginning", 0.0)
+        schedule_principal = debt_activity.get("principal", 0.0)
+        debt_balance = debt_activity.get("ending", 0.0)
+        schedule_issued = debt_activity.get("issued", 0.0)
+
+        if schedule_beginning:
+            effective_interest_rate = _safe_ratio(schedule_interest, schedule_beginning)
+        else:
+            effective_interest_rate = interest_rate_input
+
+        interest_total = interest_expense + schedule_interest
+        if not schedule_interest and schedule_beginning and interest_rate_input:
+            interest_total += schedule_beginning * interest_rate_input
 
         pre_tax_income = ebit - interest_total
         tax_rate = tax_rate_override if tax_rate_override else DEFAULT_TAX_RATE
@@ -1164,11 +1298,11 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         )
         equity_raised = sum_numeric(financing, "Equity Raised")
         dividends = sum_numeric(financing, "Dividends Paid")
-        debt_issued = sum_numeric(financing, "Debt Issued")
+        debt_issued = sum_numeric(financing, "Debt Issued") + schedule_issued
 
         cfo = net_income + depreciation - delta_working_capital
         cfi = -capex
-        cff = equity_raised + debt_issued - dividends
+        cff = equity_raised + debt_issued - dividends - schedule_principal
         net_cash_flow = cfo + cfi + cff
         cumulative_cash += net_cash_flow
         fixed_assets = max(fixed_assets + capex - depreciation, 0.0)
@@ -1290,7 +1424,8 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
                 "Dividends Paid": dividends,
                 "Debt Issued": debt_issued,
                 "Debt Balance": debt_balance,
-                "Interest Rate %": interest_rate * 100 if interest_rate else 0.0,
+                "Principal Repaid": schedule_principal,
+                "Interest Rate %": (effective_interest_rate or 0.0) * 100,
                 "Equity Value": equity_value,
             }
         )
@@ -1590,24 +1725,6 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
             )
     liquidity_df = pd.DataFrame(liquidity_rows)
 
-    debt_amort_rows: List[Dict[str, Any]] = []
-    if not equity_debt_df.empty:
-        prev_balance = 0.0
-        for _, row in equity_debt_df.iterrows():
-            balance = row.get("Debt Balance", 0.0)
-            debt_amort_rows.append(
-                {
-                    "Year": int(row["Year"]),
-                    "Opening Balance": prev_balance,
-                    "Debt Issued": row.get("Debt Issued", 0.0),
-                    "Closing Balance": balance,
-                    "Principal Change": balance - prev_balance,
-                    "Interest Rate %": row.get("Interest Rate %", 0.0),
-                }
-            )
-            prev_balance = balance
-    debt_amort_df = pd.DataFrame(debt_amort_rows)
-
     valuation_table = discount_table.copy()
     if not valuation_table.empty and not summary_df.empty:
         valuation_table.insert(0, "Year Label", summary_df["Year"].tolist()[: len(valuation_table)])
@@ -1642,7 +1759,7 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         "customer_metrics": customer_metrics_df,
         "valuation_table": valuation_table,
         "chart_payloads": chart_payloads,
-        "debt_amortization": debt_amort_df,
+        "debt_amortization": debt_amortization_df,
         "metrics_cards": metrics_cards,
         "traffic": traffic_df,
         "profitability": profitability_df,
