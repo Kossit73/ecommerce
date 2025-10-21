@@ -1016,9 +1016,17 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                     format="%d",
                     disabled=False,
                 )
-                editor_key = "assumptions_" + "".join(
-                    char.lower() if char.isalnum() else "_" for char in schedule["name"]
-                )
+
+            editor_key = "assumptions_" + "".join(
+                char.lower() if char.isalnum() else "_" for char in schedule["name"]
+            )
+            edit_state_key = f"{editor_key}_active_edit"
+            if edit_state_key not in st.session_state:
+                st.session_state[edit_state_key] = None
+
+            table_col, actions_col = st.columns([4, 1.7], gap="large")
+
+            with table_col:
                 updated = st.data_editor(
                     frame,
                     num_rows="dynamic",
@@ -1027,67 +1035,7 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                     column_config=column_config,
                 )
                 updated = updated.copy()
-                edit_state_key = f"{editor_key}_active_edit"
-                if edit_state_key not in st.session_state:
-                    st.session_state[edit_state_key] = None
 
-                if updated.empty:
-                    st.info("Add a line to begin editing this schedule.")
-                else:
-                    st.markdown("**Edit individual rows**")
-                    for idx, (_, row) in enumerate(updated.iterrows()):
-                        row_display = f"Row {idx + 1}"
-                        year_value = row.get("Year") if isinstance(row, pd.Series) else None
-                        if pd.notna(year_value):
-                            try:
-                                row_display += f" – Year {int(float(year_value))}"
-                            except (TypeError, ValueError):
-                                row_display += f" – Year {year_value}"
-                        action_cols = st.columns([0.8, 0.2], gap="small")
-                        with action_cols[0]:
-                            st.write(row_display)
-                        with action_cols[1]:
-                            if st.button(
-                                "Edit",
-                                key=f"{editor_key}_edit_button_{idx}",
-                                use_container_width=True,
-                            ):
-                                st.session_state[edit_state_key] = idx
-
-                active_edit = st.session_state.get(edit_state_key)
-                if active_edit is not None:
-                    if active_edit >= len(updated):
-                        st.session_state[edit_state_key] = None
-                    else:
-                        row_data = updated.iloc[active_edit].copy()
-                        st.divider()
-                        st.markdown(
-                            f"**Editing {schedule['name']} – Row {active_edit + 1}**"
-                        )
-                        with st.form(f"{editor_key}_edit_form"):
-                            new_values: Dict[str, Any] = {}
-                            for column in schedule["columns"]:
-                                current_value = row_data.get(column)
-                                new_values[column] = st.text_input(
-                                    column,
-                                    value=_format_edit_value(current_value),
-                                    key=f"{editor_key}_edit_field_{active_edit}_{column}",
-                                )
-                            submit_col, cancel_col = st.columns(2)
-                            submitted = submit_col.form_submit_button(
-                                "Apply changes", use_container_width=True
-                            )
-                            cancelled = cancel_col.form_submit_button(
-                                "Cancel", use_container_width=True, type="secondary"
-                            )
-                            if submitted:
-                                for column, raw_value in new_values.items():
-                                    parsed_value = _parse_edit_value(column, raw_value)
-                                    updated.at[active_edit, column] = parsed_value
-                                st.session_state[edit_state_key] = None
-                                st.success("Row updated.")
-                            elif cancelled:
-                                st.session_state[edit_state_key] = None
                 with st.expander("Line item controls", expanded=False):
                     insert_col, remove_col = st.columns(2)
                     with insert_col:
@@ -1130,6 +1078,8 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                             updated = pd.concat(
                                 [top, pd.DataFrame([new_row]), bottom], ignore_index=True
                             )
+                            st.session_state[editor_key] = updated
+                            st.success("Line inserted.")
                     with remove_col:
                         if not updated.empty:
                             remove_options = list(range(len(updated)))
@@ -1151,7 +1101,12 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                                 key=f"{editor_key}_remove_line",
                                 use_container_width=True,
                             ):
-                                updated = updated.drop(index=remove_choice).reset_index(drop=True)
+                                updated = (
+                                    updated.drop(index=remove_choice)
+                                    .reset_index(drop=True)
+                                )
+                                st.session_state[editor_key] = updated
+                                st.success("Line removed.")
                         else:
                             st.selectbox(
                                 "Row to remove",
@@ -1165,7 +1120,76 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                                 disabled=True,
                                 use_container_width=True,
                             )
-                updated_tables[schedule["name"]] = updated
+
+            active_edit = st.session_state.get(edit_state_key)
+            if active_edit is not None and active_edit >= len(updated):
+                st.session_state[edit_state_key] = None
+                active_edit = None
+
+            with actions_col:
+                if updated.empty:
+                    st.info("Add a line to begin editing this schedule.")
+                else:
+                    st.markdown("**Row actions**")
+                    for idx, (_, row) in enumerate(updated.iterrows()):
+                        summary_bits = []
+                        year_value = row.get("Year") if isinstance(row, pd.Series) else None
+                        if pd.notna(year_value):
+                            try:
+                                summary_bits.append(f"Year {int(float(year_value))}")
+                            except (TypeError, ValueError):
+                                summary_bits.append(f"Year {year_value}")
+                        preview_cols = [col for col in schedule["columns"] if col != "Year"][:2]
+                        for col in preview_cols:
+                            value = row.get(col)
+                            if pd.notna(value):
+                                summary_bits.append(f"{col}: {value}")
+                        summary_text = " | ".join(summary_bits) or f"Row {idx + 1}"
+                        row_label_col, row_button_col = st.columns([1, 0.6], gap="small")
+                        with row_label_col:
+                            st.write(summary_text)
+                        with row_button_col:
+                            if st.button(
+                                "Edit",
+                                key=f"{editor_key}_edit_button_{idx}",
+                                use_container_width=True,
+                            ):
+                                st.session_state[edit_state_key] = idx
+                                active_edit = idx
+
+                if active_edit is not None:
+                    st.divider()
+                    st.markdown(
+                        f"**Editing {schedule['name']} – Row {active_edit + 1}**"
+                    )
+                    row_data = updated.iloc[active_edit].copy()
+                    with st.form(f"{editor_key}_edit_form"):
+                        new_values: Dict[str, Any] = {}
+                        for column in schedule["columns"]:
+                            current_value = row_data.get(column)
+                            new_values[column] = st.text_input(
+                                column,
+                                value=_format_edit_value(current_value),
+                                key=f"{editor_key}_edit_field_{active_edit}_{column}",
+                            )
+                        submit_col, cancel_col = st.columns(2)
+                        submitted = submit_col.form_submit_button(
+                            "Apply changes", use_container_width=True
+                        )
+                        cancelled = cancel_col.form_submit_button(
+                            "Cancel", use_container_width=True, type="secondary"
+                        )
+                        if submitted:
+                            for column, raw_value in new_values.items():
+                                parsed_value = _parse_edit_value(column, raw_value)
+                                updated.at[active_edit, column] = parsed_value
+                            st.session_state[edit_state_key] = None
+                            st.session_state[editor_key] = updated
+                            st.success("Row updated.")
+                        elif cancelled:
+                            st.session_state[edit_state_key] = None
+
+            updated_tables[schedule["name"]] = updated
 
         combined_years = collect_all_years(updated_tables)
         base_years = (
