@@ -830,6 +830,41 @@ def _apply_benefit_totals(
     return working
 
 
+def _normalize_rate(value: Any) -> Optional[float]:
+    rate = to_number(value, None)
+    if rate is None:
+        return None
+    if abs(rate) > 1:
+        rate = rate / 100.0
+    return rate
+
+
+def _apply_asset_depreciation(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    required = [
+        "Asset_1_Amount",
+        "Asset_1_Rate",
+        "Asset_1_Depreciation",
+        "Asset_1_NBV",
+    ]
+    if not all(column in frame.columns for column in required):
+        return frame
+    working = frame.copy()
+    for idx in working.index:
+        amount = to_number(working.at[idx, "Asset_1_Amount"], None)
+        rate = _normalize_rate(working.at[idx, "Asset_1_Rate"])
+        if amount is None or rate is None:
+            depreciation = None
+            nbv = amount if amount is not None else None
+        else:
+            depreciation = round(amount * rate, 2)
+            nbv = round(amount - depreciation, 2)
+        working.at[idx, "Asset_1_Depreciation"] = depreciation
+        working.at[idx, "Asset_1_NBV"] = nbv
+    return working
+
+
 def apply_derived_assumption_values(
     tables: Dict[str, pd.DataFrame]
 ) -> Dict[str, pd.DataFrame]:
@@ -848,6 +883,9 @@ def apply_derived_assumption_values(
             derived.get("Staffing Levels"),
             executives if isinstance(executives, pd.DataFrame) else None,
         )
+    assets = derived.get("Asset Register")
+    if isinstance(assets, pd.DataFrame):
+        derived["Asset Register"] = _apply_asset_depreciation(assets)
     return derived
 
 
@@ -2067,6 +2105,17 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                         if total_col in schedule["columns"]:
                             column_config[total_col] = st.column_config.NumberColumn(
                                 total_col,
+                                format="$%0.2f",
+                                disabled=True,
+                            )
+                if schedule["name"] == "Asset Register":
+                    for derived_col in [
+                        "Asset_1_Depreciation",
+                        "Asset_1_NBV",
+                    ]:
+                        if derived_col in schedule["columns"]:
+                            column_config[derived_col] = st.column_config.NumberColumn(
+                                derived_col,
                                 format="$%0.2f",
                                 disabled=True,
                             )
