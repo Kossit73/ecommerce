@@ -5,7 +5,7 @@ import base64
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -456,6 +456,30 @@ def create_blank_schedule(columns: Iterable[str], years: Iterable[int]) -> pd.Da
         frame[column] = None
     # Ensure column order matches the schedule definition
     return frame[[col for col in columns if col in frame.columns]]
+
+
+def _coerce_schedule_frame(data: Any, columns: Sequence[str]) -> pd.DataFrame:
+    column_list = list(columns)
+    if isinstance(data, pd.DataFrame):
+        frame = data.copy()
+    elif data is None:
+        frame = pd.DataFrame(columns=column_list)
+    else:
+        frame = pd.DataFrame(data)
+    for column in column_list:
+        if column not in frame.columns:
+            frame[column] = None
+    frame = frame[column_list]
+    return frame.reset_index(drop=True)
+
+
+def _dataframes_equal(left: Any, right: Any) -> bool:
+    if isinstance(left, pd.DataFrame) and isinstance(right, pd.DataFrame):
+        try:
+            return left.equals(right)
+        except Exception:  # pragma: no cover - defensive
+            return False
+    return left is right
 
 
 def _format_edit_value(value: Any) -> str:
@@ -1009,6 +1033,7 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                 frame = tables.get(schedule["name"])
                 if frame is None:
                     frame = create_blank_schedule(schedule["columns"], current_years)
+                frame = _coerce_schedule_frame(frame, schedule["columns"])
                 column_config: Dict[str, Any] = {}
                 column_config["Year"] = st.column_config.NumberColumn(
                     "Year",
@@ -1020,21 +1045,35 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
             editor_key = "assumptions_" + "".join(
                 char.lower() if char.isalnum() else "_" for char in schedule["name"]
             )
+            data_state_key = f"{editor_key}_table"
             edit_state_key = f"{editor_key}_active_edit"
             if edit_state_key not in st.session_state:
                 st.session_state[edit_state_key] = None
+
+            stored_table = st.session_state.get(data_state_key)
+            if stored_table is None:
+                st.session_state[data_state_key] = frame.copy()
+            else:
+                coerced = _coerce_schedule_frame(stored_table, schedule["columns"])
+                if not _dataframes_equal(coerced, frame):
+                    coerced = frame.copy()
+                st.session_state[data_state_key] = coerced.copy()
+
+            working_table = _coerce_schedule_frame(
+                st.session_state[data_state_key], schedule["columns"]
+            )
 
             table_col, actions_col = st.columns([4, 1.7], gap="large")
 
             with table_col:
                 updated = st.data_editor(
-                    frame,
+                    working_table,
                     num_rows="dynamic",
                     use_container_width=True,
                     key=editor_key,
                     column_config=column_config,
                 )
-                updated = updated.copy()
+                updated = _coerce_schedule_frame(updated, schedule["columns"])
 
                 with st.expander("Line item controls", expanded=False):
                     insert_col, remove_col = st.columns(2)
@@ -1078,7 +1117,7 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                             updated = pd.concat(
                                 [top, pd.DataFrame([new_row]), bottom], ignore_index=True
                             )
-                            st.session_state[editor_key] = updated
+                            st.session_state[data_state_key] = updated.copy()
                             st.success("Line inserted.")
                     with remove_col:
                         if not updated.empty:
@@ -1105,7 +1144,7 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                                     updated.drop(index=remove_choice)
                                     .reset_index(drop=True)
                                 )
-                                st.session_state[editor_key] = updated
+                                st.session_state[data_state_key] = updated.copy()
                                 st.success("Line removed.")
                         else:
                             st.selectbox(
@@ -1184,11 +1223,12 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                                 parsed_value = _parse_edit_value(column, raw_value)
                                 updated.at[active_edit, column] = parsed_value
                             st.session_state[edit_state_key] = None
-                            st.session_state[editor_key] = updated
+                            st.session_state[data_state_key] = updated.copy()
                             st.success("Row updated.")
                         elif cancelled:
                             st.session_state[edit_state_key] = None
 
+            st.session_state[data_state_key] = updated.copy()
             updated_tables[schedule["name"]] = updated
 
         combined_years = collect_all_years(updated_tables)
