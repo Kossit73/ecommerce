@@ -2,11 +2,13 @@
 from __future__ import annotations
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import numpy as np
+import math
 
 # ---------------------------------------------------------------------------
 # Streamlit configuration & constants
@@ -870,6 +872,104 @@ def _sum_numeric_columns(frame: pd.DataFrame) -> float:
     return total
 
 
+def compute_irr_value(cash_flows: Sequence[float]) -> Optional[float]:
+    valid_flows = [float(cf) for cf in cash_flows if pd.notna(cf)]
+    if not valid_flows:
+        return None
+    has_positive = any(cf > 0 for cf in valid_flows)
+    has_negative = any(cf < 0 for cf in valid_flows)
+    if not (has_positive and has_negative):
+        return None
+    try:
+        irr = np.irr(valid_flows)
+    except (FloatingPointError, ValueError, ZeroDivisionError):
+        return None
+    if irr is None or np.isnan(irr):
+        return None
+    return irr
+
+
+def build_discount_table(cash_flows: Sequence[float], rate: float) -> pd.DataFrame:
+    rows: List[Dict[str, Any]] = []
+    for idx, cash_flow in enumerate(cash_flows, start=1):
+        discount_factor = 1 / ((1 + rate) ** idx) if rate is not None else 1.0
+        discounted_value = cash_flow * discount_factor
+        rows.append(
+            {
+                "Year": idx,
+                "Net Cash Flow": cash_flow,
+                "Discount Factor": discount_factor,
+                "Discounted Cash Flow": discounted_value,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _safe_ratio(numerator: float, denominator: float) -> float:
+    if denominator in (0, None) or (isinstance(denominator, float) and math.isclose(denominator, 0.0)):
+        return 0.0
+    return numerator / denominator
+
+
+def monte_carlo_analysis(
+    base_cashflows: Sequence[float],
+    iterations: int,
+    revenue_sigma: float,
+    cost_sigma: float,
+    discount_rate: float,
+) -> pd.DataFrame:
+    if not base_cashflows or iterations <= 0:
+        return pd.DataFrame()
+    base_array = np.array(list(base_cashflows), dtype=float)
+    results = []
+    for _ in range(iterations):
+        revenue_factor = np.random.normal(1.0, revenue_sigma)
+        cost_factor = np.random.normal(1.0, cost_sigma)
+        simulated = base_array * revenue_factor - (base_array.clip(min=0) * (cost_factor - 1))
+        discount = 1 / ((1 + discount_rate) ** np.arange(1, len(simulated) + 1))
+        npv = float(np.sum(simulated * discount))
+        cumulative = simulated.cumsum()
+        results.append(
+            {
+                "NPV": npv,
+                "Ending Cash": float(cumulative[-1]),
+                "Min Cash": float(np.min(cumulative)),
+            }
+        )
+    return pd.DataFrame(results)
+
+
+def simple_forecast(series: Sequence[float], periods: int) -> List[float]:
+    values = [float(val) for val in series if pd.notna(val)]
+    if not values:
+        return []
+    if len(values) == 1:
+        growth = 0.0
+    else:
+        growth_rates = [
+            (values[idx] - values[idx - 1]) / values[idx - 1]
+            for idx in range(1, len(values))
+            if values[idx - 1]
+        ]
+        growth = np.mean(growth_rates) if growth_rates else 0.0
+    last = values[-1]
+    forecast = []
+    for _ in range(periods):
+        last = last * (1 + growth)
+        forecast.append(last)
+    return forecast
+
+
+def goal_seek_margin(target_margin: float, base_revenue: float, base_margin: float) -> Tuple[float, float]:
+    if base_revenue == 0:
+        return 1.0, base_margin
+    required_margin = target_margin
+    if required_margin <= 0:
+        return 1.0, base_margin
+    multiplier = required_margin / base_margin if base_margin else 1.0
+    return multiplier, base_margin * multiplier
+
+
 def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
     sanitized = sanitize_tables(tables)
     years = gather_years(sanitized)
@@ -881,8 +981,17 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
     position_rows: List[Dict[str, Any]] = []
     cashflow_rows: List[Dict[str, Any]] = []
 
+    revenue_matrix_rows: List[Dict[str, Any]] = []
+    depreciation_rows: List[Dict[str, Any]] = []
+    equity_debt_rows: List[Dict[str, Any]] = []
+    customer_metrics_rows: List[Dict[str, Any]] = []
+    operational_kpis_rows: List[Dict[str, Any]] = []
+
     traffic_rows: List[Dict[str, Any]] = []
     profitability_rows: List[Dict[str, Any]] = []
+
+    contribution_rows: List[Dict[str, Any]] = []
+    consideration_rows: List[Dict[str, Any]] = []
 
     cumulative_cash = 0.0
     fixed_assets = 0.0
@@ -916,6 +1025,15 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
             total_orders += traffic * conversion
             cpc = avg_numeric(acquisition, channel["cpc"])
             marketing_spend += traffic * cpc
+            consideration_rows.append(
+                {
+                    "Year": year,
+                    "Channel": channel["label"],
+                    "Traffic": traffic,
+                    "Conversion Rate": conversion,
+                    "Cost per Click": cpc,
+                }
+            )
 
         churn_rate = to_decimal(avg_numeric(demand, "Churn Rate"))
         avg_item_value = avg_numeric(pricing, "Average Item Value")
@@ -1025,6 +1143,38 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         gross_margin_pct = (gross_profit / net_revenue * 100.0) if net_revenue else 0.0
         ebitda_margin_pct = (ebitda / net_revenue * 100.0) if net_revenue else 0.0
         net_margin_pct = (net_income / net_revenue * 100.0) if net_revenue else 0.0
+        operating_costs = (
+            marketing_spend
+            + fulfillment_cost
+            + warehouse_rent
+            + other_operating
+            + staffing_cost
+            + executive_comp
+            + benefits_total
+            + overhead_salaries
+            + office_rent
+            + professional_fees
+            + property_cost
+            + legal_cost
+        )
+        contribution_margin = net_revenue - cogs - marketing_spend - fulfillment_cost
+        contribution_margin_pct = (
+            (contribution_margin / net_revenue * 100.0) if net_revenue else 0.0
+        )
+        customer_count = total_orders if total_orders else 0.0
+        cac = (marketing_spend / customer_count) if customer_count else 0.0
+        contribution_per_order = (
+            (contribution_margin / customer_count) if customer_count else 0.0
+        )
+        payback_months = (
+            (cac / contribution_per_order * 12.0)
+            if contribution_per_order
+            else None
+        )
+        burn_rate = max(-(cfo) / 12.0, 0.0)
+        ltv = (
+            (gross_profit / customer_count) if customer_count else 0.0
+        )
 
         summary_rows.append(
             {
@@ -1037,6 +1187,19 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
                 "EBITDA Margin %": ebitda_margin_pct,
                 "Net Margin %": net_margin_pct,
                 "Total Orders": total_orders,
+            }
+        )
+
+        revenue_matrix_rows.append(
+            {
+                "Year": year,
+                "Total Traffic": total_traffic,
+                "Total Orders": total_orders,
+                "Gross Order Value": gross_order_value,
+                "Net Revenue": net_revenue,
+                "COGS": cogs,
+                "Gross Profit": gross_profit,
+                "Contribution Margin %": contribution_margin_pct,
             }
         )
 
@@ -1057,6 +1220,17 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
             }
         )
 
+        depreciation_rows.append(
+            {
+                "Year": year,
+                "Technology Development": sum_numeric(capital, "Technology Development"),
+                "Office Equipment": sum_numeric(capital, "Office Equipment"),
+                "Depreciation Expense": depreciation,
+                "Net New Capex": capex,
+                "Net Book Value": fixed_assets,
+            }
+        )
+
         position_rows.append(
             {
                 "Year": year,
@@ -1070,6 +1244,19 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
             }
         )
 
+        equity_debt_rows.append(
+            {
+                "Year": year,
+                "Equity Raised": equity_raised,
+                "Retained Earnings": retained_equity,
+                "Dividends Paid": dividends,
+                "Debt Issued": debt_issued,
+                "Debt Balance": debt_balance,
+                "Interest Rate %": interest_rate * 100 if interest_rate else 0.0,
+                "Equity Value": equity_value,
+            }
+        )
+
         cashflow_rows.append(
             {
                 "Year": year,
@@ -1078,6 +1265,71 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
                 "Cash Flow from Financing": cff,
                 "Net Cash Flow": net_cash_flow,
                 "Ending Cash": cumulative_cash,
+            }
+        )
+
+        customer_metrics_rows.append(
+            {
+                "Year": year,
+                "Customers": customer_count,
+                "CAC": cac,
+                "LTV": ltv,
+                "LTV/CAC": _safe_ratio(ltv, cac) if cac else 0.0,
+                "Payback Months": payback_months,
+                "Monthly Burn": burn_rate,
+                "Customer IRR": (
+                    (contribution_margin - marketing_spend) / marketing_spend
+                    if marketing_spend
+                    else 0.0
+                ),
+            }
+        )
+
+        contribution_rows.append(
+            {
+                "Year": year,
+                "Revenue": net_revenue,
+                "COGS": -cogs,
+                "Marketing": -marketing_spend,
+                "Fulfillment": -fulfillment_cost,
+                "Operating Expenses": -(
+                    staffing_cost
+                    + executive_comp
+                    + benefits_total
+                    + overhead_salaries
+                    + office_rent
+                    + professional_fees
+                    + property_cost
+                    + legal_cost
+                ),
+                "EBITDA": ebitda,
+                "Depreciation": -depreciation,
+                "Interest": -interest_total,
+                "Taxes": -taxes,
+                "Net Income": net_income,
+            }
+        )
+
+        previous_summary = summary_rows[-2] if len(summary_rows) > 1 else None
+        revenue_growth = 0.0
+        if previous_summary:
+            revenue_growth = (
+                _safe_ratio(
+                    net_revenue - previous_summary["Net Revenue"],
+                    previous_summary["Net Revenue"],
+                )
+                * 100.0
+            )
+        total_assets = cumulative_cash + receivables + inventory_value + fixed_assets
+        operational_kpis_rows.append(
+            {
+                "Year": year,
+                "Revenue Growth %": revenue_growth,
+                "Gross Margin %": gross_margin_pct,
+                "EBITDA Margin %": ebitda_margin_pct,
+                "Net Margin %": net_margin_pct,
+                "ROE %": (_safe_ratio(net_income, equity_value) * 100.0) if equity_value else 0.0,
+                "Asset Turnover": _safe_ratio(net_revenue, total_assets),
             }
         )
 
@@ -1101,6 +1353,12 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
     performance_df = pd.DataFrame(performance_rows)
     position_df = pd.DataFrame(position_rows)
     cashflow_df = pd.DataFrame(cashflow_rows)
+    revenue_matrix = pd.DataFrame(revenue_matrix_rows)
+    depreciation_df = pd.DataFrame(depreciation_rows)
+    equity_debt_df = pd.DataFrame(equity_debt_rows)
+    customer_metrics_df = pd.DataFrame(customer_metrics_rows)
+    operational_kpis_df = pd.DataFrame(operational_kpis_rows)
+    contribution_df = pd.DataFrame(contribution_rows)
 
     metrics_cards: List[Dict[str, Any]] = []
     if not summary_df.empty:
@@ -1114,6 +1372,7 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
 
     traffic_df = pd.DataFrame(traffic_rows)
     profitability_df = pd.DataFrame(profitability_rows)
+    consideration_df = pd.DataFrame(consideration_rows)
 
     cash_flows = cashflow_df["Net Cash Flow"].to_list() if not cashflow_df.empty else []
     discount_rate = to_decimal(
@@ -1123,6 +1382,8 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         cf / ((1 + discount_rate) ** idx) for idx, cf in enumerate(cash_flows, start=1)
     ] if discount_rate is not None and cash_flows else []
     npv = sum(discounted) if discounted else 0.0
+    irr_value = compute_irr_value(cash_flows)
+    discount_table = build_discount_table(cash_flows, discount_rate if discount_rate else 0.0)
     cumulative = cashflow_df["Ending Cash"].tolist() if not cashflow_df.empty else []
     payback_period = None
     if cumulative:
@@ -1149,17 +1410,212 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
                 }
             )
 
+    scenario_summary = pd.DataFrame()
+    if not summary_df.empty:
+        base_row = summary_df.iloc[-1]
+        scenario_rows: List[Dict[str, Any]] = []
+        base_cashflows = cash_flows or []
+
+        def scenario_entry(name: str, revenue_factor: float, margin_shift: float) -> Dict[str, Any]:
+            revenue = base_row["Net Revenue"] * revenue_factor
+            gross_margin = max((base_row["Gross Margin %"] / 100.0) + margin_shift, 0.0)
+            ebitda_margin = max((base_row["EBITDA Margin %"] / 100.0) + margin_shift / 2, 0.0)
+            net_margin = max((base_row["Net Margin %"] / 100.0) + margin_shift / 2, 0.0)
+            gross_profit_val = revenue * gross_margin
+            ebitda_val = revenue * ebitda_margin
+            net_income_val = revenue * net_margin
+            scaled_cashflows = [cf * revenue_factor for cf in base_cashflows]
+            irr = compute_irr_value(scaled_cashflows)
+            dcf = build_discount_table(
+                scaled_cashflows,
+                discount_rate if discount_rate else DEFAULT_DISCOUNT_RATE,
+            )
+            scenario_npv = dcf["Discounted Cash Flow"].sum() if not dcf.empty else 0.0
+            return {
+                "Scenario": name,
+                "Net Revenue": revenue,
+                "Gross Profit": gross_profit_val,
+                "EBITDA": ebitda_val,
+                "Net Income": net_income_val,
+                "NPV": scenario_npv,
+                "IRR": irr,
+            }
+
+        scenario_rows.append(scenario_entry("Base Case", 1.0, 0.0))
+        scenario_rows.append(scenario_entry("Best Case", 1.1, 0.02))
+        scenario_rows.append(scenario_entry("Worst Case", 0.9, -0.02))
+        scenario_summary = pd.DataFrame(scenario_rows)
+
+    breakeven_details: Dict[str, Any] = {}
+    margin_of_safety: Dict[str, Any] = {}
+    if not contribution_df.empty:
+        latest_contrib = contribution_df.iloc[-1]
+        revenue = latest_contrib["Revenue"]
+        variable_costs = -(
+            latest_contrib["COGS"]
+            + latest_contrib["Marketing"]
+            + latest_contrib["Fulfillment"]
+        )
+        contribution_margin_pct = (
+            (revenue - variable_costs) / revenue if revenue else 0.0
+        )
+        fixed_costs = -latest_contrib["Operating Expenses"]
+        breakeven_revenue = (
+            fixed_costs / contribution_margin_pct if contribution_margin_pct else 0.0
+        )
+        breakeven_details = {
+            "Contribution Margin %": contribution_margin_pct * 100.0,
+            "Fixed Costs": fixed_costs,
+            "Break-even Revenue": breakeven_revenue,
+        }
+        margin_of_safety = {
+            "Actual Revenue": revenue,
+            "Break-even Revenue": breakeven_revenue,
+            "Margin of Safety %": (
+                (revenue - breakeven_revenue) / revenue * 100.0 if revenue else 0.0
+            ),
+        }
+
+    chart_payloads = {
+        "revenue": {
+            "years": summary_df["Year"].tolist() if not summary_df.empty else [],
+            "net_revenue": summary_df["Net Revenue"].tolist() if not summary_df.empty else [],
+            "gross_margin": (summary_df["Gross Margin %"].tolist() if not summary_df.empty else []),
+            "ebitda_margin": (
+                summary_df["EBITDA Margin %"].tolist() if not summary_df.empty else []
+            ),
+        },
+        "traffic": {
+            "years": traffic_df["Year"].tolist() if not traffic_df.empty else [],
+            "traffic": traffic_df["Traffic"].tolist() if not traffic_df.empty else [],
+            "orders": traffic_df["Orders"].tolist() if not traffic_df.empty else [],
+        },
+        "profitability": {
+            "years": profitability_df["Year"].tolist() if not profitability_df.empty else [],
+            "ebitda": profitability_df["EBITDA"].tolist() if not profitability_df.empty else [],
+            "net_income": profitability_df["Net Income"].tolist() if not profitability_df.empty else [],
+            "cash": cashflow_df["Ending Cash"].tolist() if not cashflow_df.empty else [],
+        },
+        "cashflow": {
+            "years": cashflow_df["Year"].tolist() if not cashflow_df.empty else [],
+            "operations": cashflow_df["Cash Flow from Operations"].tolist()
+            if not cashflow_df.empty
+            else [],
+            "investing": cashflow_df["Cash Flow from Investing"].tolist()
+            if not cashflow_df.empty
+            else [],
+            "financing": cashflow_df["Cash Flow from Financing"].tolist()
+            if not cashflow_df.empty
+            else [],
+        },
+        "margin_trend": operational_kpis_df[["Year", "Gross Margin %", "EBITDA Margin %", "Net Margin %"]]
+        if not operational_kpis_df.empty
+        else pd.DataFrame(),
+        "waterfall": contribution_df.iloc[-1] if not contribution_df.empty else pd.Series(),
+        "breakeven": breakeven_details,
+        "margin_of_safety": margin_of_safety,
+        "valuation": discount_table,
+        "customer_consideration": consideration_df,
+        "dcf_summary": discount_table,
+    }
+
+    income_statement = summary_df.merge(
+        performance_df[
+            [
+                "Year",
+                "Marketing Spend",
+                "Fulfillment Cost",
+                "Staffing Cost",
+                "Benefits",
+                "Overheads",
+                "Property & Legal",
+            ]
+        ],
+        on="Year",
+        how="left",
+    ) if not summary_df.empty else pd.DataFrame()
+
+    liquidity_rows: List[Dict[str, Any]] = []
+    if not position_df.empty:
+        for _, row in position_df.iterrows():
+            current_assets = row["Cash"] + row["Accounts Receivable"] + row["Inventory"]
+            current_liabilities = row["Accounts Payable"] + row["Debt"]
+            liquidity_rows.append(
+                {
+                    "Year": int(row["Year"]),
+                    "Current Ratio": _safe_ratio(current_assets, current_liabilities),
+                    "Quick Ratio": _safe_ratio(
+                        row["Cash"] + row["Accounts Receivable"], current_liabilities
+                    ),
+                    "Debt to Equity": _safe_ratio(row["Debt"], row["Equity"]),
+                }
+            )
+    liquidity_df = pd.DataFrame(liquidity_rows)
+
+    debt_amort_rows: List[Dict[str, Any]] = []
+    if not equity_debt_df.empty:
+        prev_balance = 0.0
+        for _, row in equity_debt_df.iterrows():
+            balance = row.get("Debt Balance", 0.0)
+            debt_amort_rows.append(
+                {
+                    "Year": int(row["Year"]),
+                    "Opening Balance": prev_balance,
+                    "Debt Issued": row.get("Debt Issued", 0.0),
+                    "Closing Balance": balance,
+                    "Principal Change": balance - prev_balance,
+                    "Interest Rate %": row.get("Interest Rate %", 0.0),
+                }
+            )
+            prev_balance = balance
+    debt_amort_df = pd.DataFrame(debt_amort_rows)
+
+    valuation_table = discount_table.copy()
+    if not valuation_table.empty and not summary_df.empty:
+        valuation_table.insert(0, "Year Label", summary_df["Year"].tolist()[: len(valuation_table)])
+
+    top_sensitivity_rows: List[Dict[str, Any]] = []
+    if not scenario_summary.empty:
+        base_metrics = scenario_summary.iloc[0]
+        for idx in range(1, len(scenario_summary)):
+            scenario = scenario_summary.iloc[idx]
+            top_sensitivity_rows.append(
+                {
+                    "Scenario": scenario["Scenario"],
+                    "Net Income Delta": scenario["Net Income"] - base_metrics["Net Income"],
+                    "EBITDA Delta": scenario["EBITDA"] - base_metrics["EBITDA"],
+                    "Equity Delta": scenario["NPV"] - scenario_summary.iloc[0]["NPV"],
+                }
+            )
+    top_sensitivity_df = pd.DataFrame(top_sensitivity_rows)
+
     return {
         "summary": summary_df,
         "performance": performance_df,
         "position": position_df,
         "cashflow": cashflow_df,
+        "income_statement": income_statement,
+        "liquidity": liquidity_df,
+        "revenue_matrix": revenue_matrix,
+        "depreciation_matrix": depreciation_df,
+        "equity_debt_matrix": equity_debt_df,
+        "scenario_summary": scenario_summary,
+        "operational_kpis": operational_kpis_df,
+        "customer_metrics": customer_metrics_df,
+        "valuation_table": valuation_table,
+        "chart_payloads": chart_payloads,
+        "debt_amortization": debt_amort_df,
         "metrics_cards": metrics_cards,
         "traffic": traffic_df,
         "profitability": profitability_df,
+        "customer_consideration": consideration_df,
         "npv": npv,
+        "irr": irr_value,
         "payback_year": payback_period,
         "sensitivity": pd.DataFrame(sensitivity_data),
+        "breakeven": breakeven_details,
+        "margin_of_safety": margin_of_safety,
+        "top_sensitivity": top_sensitivity_df,
     }
 
 
@@ -1323,6 +1779,141 @@ def build_cashflow_figure(payload: Dict[str, Any]) -> go.Figure:
         barmode="group",
         yaxis=dict(title="Cash Flow", tickprefix="$", separatethousands=True),
         margin=dict(t=60, r=40, l=40, b=40),
+    )
+    return fig
+
+
+def build_margin_trend_figure(df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if df.empty:
+        return fig
+    for column, color in [
+        ("Gross Margin %", "#2563eb"),
+        ("EBITDA Margin %", "#a855f7"),
+        ("Net Margin %", "#22c55e"),
+    ]:
+        fig.add_trace(
+            go.Scatter(
+                name=column,
+                x=df["Year"],
+                y=df[column],
+                mode="lines+markers",
+                marker=dict(color=color),
+            )
+        )
+    fig.update_layout(
+        title="Margin trends",
+        yaxis=dict(title="Margin %", tickformat=".1f"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return fig
+
+
+def build_breakeven_indicator(breakeven: Dict[str, Any], margin_safety: Dict[str, Any]) -> go.Figure:
+    fig = go.Figure()
+    if not breakeven:
+        return fig
+    actual_revenue = margin_safety.get("Actual Revenue", 0.0) if margin_safety else 0.0
+    max_value = max(actual_revenue, breakeven.get("Break-even Revenue", 0.0))
+    if max_value <= 0:
+        max_value = breakeven.get("Break-even Revenue", 1.0) or 1.0
+    fig.add_trace(
+        go.Indicator(
+            mode="number+gauge+delta",
+            value=breakeven.get("Break-even Revenue", 0.0),
+            number=dict(prefix="$", valueformat=",.0f"),
+            delta=dict(
+                reference=actual_revenue if actual_revenue else None,
+                valueformat=",.0f",
+                increasing_color="#22c55e",
+                decreasing_color="#ef4444",
+            ),
+            gauge={
+                "axis": {"range": [0, max_value * 1.2]},
+                "bar": {"color": "#2563eb"},
+            },
+            title={"text": "Break-even revenue"},
+        )
+    )
+    return fig
+
+
+def build_customer_consideration_chart(df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if df.empty:
+        return fig
+    latest_year = df["Year"].max()
+    latest = df[df["Year"] == latest_year]
+    fig.add_trace(
+        go.Bar(
+            name="Traffic",
+            x=latest["Channel"],
+            y=latest["Traffic"],
+            marker_color="#2563eb",
+            yaxis="y1",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            name="Conversion Rate",
+            x=latest["Channel"],
+            y=latest["Conversion Rate"] * 100.0,
+            mode="lines+markers",
+            marker=dict(color="#f97316"),
+            yaxis="y2",
+        )
+    )
+    fig.update_layout(
+        title=f"Customer consideration – {int(latest_year)}",
+        yaxis=dict(title="Traffic", separatethousands=True),
+        yaxis2=dict(title="Conversion %", overlaying="y", side="right", tickformat=".1f"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return fig
+
+
+def build_cashflow_forecast_chart(payload: Dict[str, Any]) -> go.Figure:
+    fig = go.Figure()
+    years = payload.get("years") or []
+    if not years:
+        return fig
+    for key, label, color in [
+        ("operations", "Operations", "#22c55e"),
+        ("investing", "Investing", "#f97316"),
+        ("financing", "Financing", "#3b82f6"),
+    ]:
+        fig.add_trace(
+            go.Scatter(
+                name=label,
+                x=years,
+                y=payload.get(key, []),
+                mode="lines+markers",
+                marker=dict(color=color),
+            )
+        )
+    fig.update_layout(
+        title="Cash flow forecast detail",
+        yaxis=dict(title="Cash Flow", tickprefix="$", separatethousands=True),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return fig
+
+
+def build_dcf_summary_chart(df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if df.empty:
+        return fig
+    fig.add_trace(
+        go.Bar(
+            name="Discounted CF",
+            x=df.get("Year Label", df["Year"]),
+            y=df["Discounted Cash Flow"],
+            marker_color="#0ea5e9",
+        )
+    )
+    fig.update_layout(
+        title="DCF summary",
+        yaxis=dict(title="Value", tickprefix="$", separatethousands=True),
     )
     return fig
 
@@ -1781,6 +2372,53 @@ def render_metrics_tab(tab: st.delta_generator.DeltaGenerator) -> None:
 
         render_metric_cards(results.get("metrics_cards", []))
 
+        scenario_df: pd.DataFrame = results.get("scenario_summary", pd.DataFrame())
+        if not scenario_df.empty:
+            st.subheader("Scenario analysis summary")
+            formatted = scenario_df.copy()
+            if "IRR" in formatted.columns:
+                formatted["IRR"] = formatted["IRR"].apply(
+                    lambda val: f"{val*100:,.2f}%" if pd.notna(val) else "n/a"
+                )
+            st.dataframe(formatted.set_index("Scenario"), use_container_width=True)
+
+        key_metrics = st.columns(3)
+        npv_value = results.get("npv", 0.0)
+        irr_value = results.get("irr")
+        payback_year = results.get("payback_year")
+        key_metrics[0].metric("Net Present Value", f"${npv_value:,.0f}")
+        irr_display = f"{irr_value*100:,.2f}%" if irr_value is not None else "n/a"
+        key_metrics[1].metric("Internal Rate of Return", irr_display)
+        payback_text = str(payback_year) if payback_year else "Not achieved"
+        key_metrics[2].metric("Payback year", payback_text)
+
+        revenue_matrix = results.get("revenue_matrix", pd.DataFrame())
+        if not revenue_matrix.empty:
+            st.subheader("Revenue matrix")
+            st.dataframe(revenue_matrix.set_index("Year"), use_container_width=True)
+
+        depreciation_matrix = results.get("depreciation_matrix", pd.DataFrame())
+        equity_debt_matrix = results.get("equity_debt_matrix", pd.DataFrame())
+        matrix_cols = st.columns(2)
+        with matrix_cols[0]:
+            if depreciation_matrix.empty:
+                st.info("No depreciation schedule available yet.")
+            else:
+                st.subheader("Depreciation matrix")
+                st.dataframe(
+                    depreciation_matrix.set_index("Year"), use_container_width=True
+                )
+        with matrix_cols[1]:
+            if equity_debt_matrix.empty:
+                st.info("No equity & debt data available yet.")
+            else:
+                st.subheader("Equity & debt matrix")
+                st.dataframe(
+                    equity_debt_matrix.set_index("Year"), use_container_width=True
+                )
+
+        chart_payloads: Dict[str, Any] = results.get("chart_payloads", {})
+
         if not summary_df.empty:
             years = summary_df["Year"].tolist()
             revenue_payload = {
@@ -1823,6 +2461,82 @@ def render_metrics_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                     use_container_width=True,
                 )
 
+        kpi_df: pd.DataFrame = results.get("operational_kpis", pd.DataFrame())
+        if not kpi_df.empty:
+            st.subheader("Operational KPIs")
+            st.dataframe(kpi_df.set_index("Year"), use_container_width=True)
+            st.plotly_chart(
+                build_margin_trend_figure(kpi_df), use_container_width=True
+            )
+
+        customer_metrics_df: pd.DataFrame = results.get("customer_metrics", pd.DataFrame())
+        if not customer_metrics_df.empty:
+            st.subheader("Customer metrics")
+            st.dataframe(
+                customer_metrics_df.set_index("Year"), use_container_width=True
+            )
+            consideration_df: pd.DataFrame = results.get(
+                "customer_consideration", pd.DataFrame()
+            )
+            if not consideration_df.empty:
+                st.plotly_chart(
+                    build_customer_consideration_chart(consideration_df),
+                    use_container_width=True,
+                )
+
+        if chart_payloads:
+            breakeven = results.get("breakeven", {})
+            margin_safety = results.get("margin_of_safety", {})
+            indicator_cols = st.columns(2)
+            indicator_cols[0].plotly_chart(
+                build_breakeven_indicator(breakeven, margin_safety),
+                use_container_width=True,
+            )
+            if margin_safety:
+                indicator_cols[1].metric(
+                    "Margin of safety",
+                    f"{margin_safety.get('Margin of Safety %', 0.0):,.2f}%",
+                )
+
+            waterfall_series: pd.Series = chart_payloads.get("waterfall", pd.Series())
+            if isinstance(waterfall_series, pd.Series) and not waterfall_series.empty:
+                categories = [
+                    "Revenue",
+                    "COGS",
+                    "Marketing",
+                    "Fulfillment",
+                    "Operating Expenses",
+                    "EBITDA",
+                    "Depreciation",
+                    "Interest",
+                    "Taxes",
+                    "Net Income",
+                ]
+                values = [waterfall_series.get(cat, 0.0) for cat in categories]
+                measures = ["absolute", "relative", "relative", "relative", "relative", "absolute", "relative", "relative", "relative", "absolute"]
+                waterfall_payload = {
+                    "categories": categories,
+                    "values": values,
+                    "measures": measures,
+                }
+                st.plotly_chart(
+                    build_waterfall(waterfall_payload, "Income waterfall"),
+                    use_container_width=True,
+                )
+
+            cashflow_payload = chart_payloads.get("cashflow", {})
+            if cashflow_payload:
+                st.plotly_chart(
+                    build_cashflow_forecast_chart(cashflow_payload),
+                    use_container_width=True,
+                )
+
+            valuation_df: pd.DataFrame = chart_payloads.get("dcf_summary", pd.DataFrame())
+            if isinstance(valuation_df, pd.DataFrame) and not valuation_df.empty:
+                st.plotly_chart(
+                    build_dcf_summary_chart(valuation_df), use_container_width=True
+                )
+
 
 def render_performance_tab(tab: st.delta_generator.DeltaGenerator) -> None:
     with tab:
@@ -1834,36 +2548,64 @@ def render_performance_tab(tab: st.delta_generator.DeltaGenerator) -> None:
             st.info("Apply assumptions on the Input tab to calculate performance views.")
             return
 
-        performance_df: pd.DataFrame = results.get("performance", pd.DataFrame())
-        if performance_df.empty:
-            st.info("Add assumption data to see performance tables.")
+        income_statement = results.get("income_statement", pd.DataFrame())
+        if income_statement.empty:
+            st.info("Add assumption data to see the income statement.")
             return
 
-        st.dataframe(performance_df.set_index("Year"), use_container_width=True)
+        st.subheader("Comprehensive income statement")
+        st.dataframe(income_statement.set_index("Year"), use_container_width=True)
 
-        fig = go.Figure()
-        for column, color in [
-            ("Marketing Spend", "#3b82f6"),
-            ("Fulfillment Cost", "#10b981"),
-            ("Staffing Cost", "#f97316"),
-            ("Benefits", "#8b5cf6"),
-            ("Overheads", "#ef4444"),
-        ]:
-            fig.add_trace(
-                go.Scatter(
-                    name=column,
-                    x=performance_df["Year"],
-                    y=performance_df[column],
-                    mode="lines+markers",
-                    marker=dict(color=color),
+        performance_df: pd.DataFrame = results.get("performance", pd.DataFrame())
+        if not performance_df.empty:
+            st.subheader("Operating drivers")
+            st.dataframe(performance_df.set_index("Year"), use_container_width=True)
+
+            fig = go.Figure()
+            for column, color in [
+                ("Marketing Spend", "#3b82f6"),
+                ("Fulfillment Cost", "#10b981"),
+                ("Staffing Cost", "#f97316"),
+                ("Benefits", "#8b5cf6"),
+                ("Overheads", "#ef4444"),
+            ]:
+                fig.add_trace(
+                    go.Scatter(
+                        name=column,
+                        x=performance_df["Year"],
+                        y=performance_df[column],
+                        mode="lines+markers",
+                        marker=dict(color=color),
+                    )
                 )
+            fig.update_layout(
+                title="Operating cost profile",
+                yaxis=dict(title="Cost", tickprefix="$", separatethousands=True),
+                legend=dict(orientation="h", y=-0.2),
             )
-        fig.update_layout(
-            title="Operating cost profile",
-            yaxis=dict(title="Cost", tickprefix="$", separatethousands=True),
-            legend=dict(orientation="h", y=-0.2),
-        )
-        st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True)
+
+        ratios_df: pd.DataFrame = results.get("operational_kpis", pd.DataFrame())
+        if not ratios_df.empty:
+            st.subheader("Profitability ratios")
+            ratio_view = ratios_df[[
+                "Year",
+                "Gross Margin %",
+                "EBITDA Margin %",
+                "Net Margin %",
+                "ROE %",
+                "Asset Turnover",
+            ]]
+            st.dataframe(ratio_view.set_index("Year"), use_container_width=True)
+
+        chart_payloads: Dict[str, Any] = results.get("chart_payloads", {})
+        profitability_payload = chart_payloads.get("profitability")
+        if profitability_payload:
+            st.subheader("Profitability analysis")
+            st.plotly_chart(
+                build_profitability_figure(profitability_payload),
+                use_container_width=True,
+            )
 
 
 def render_position_tab(tab: st.delta_generator.DeltaGenerator) -> None:
@@ -1881,16 +2623,17 @@ def render_position_tab(tab: st.delta_generator.DeltaGenerator) -> None:
             st.info("No balance sheet data available yet.")
             return
 
+        st.subheader("Balance sheet")
         st.dataframe(position_df.set_index("Year"), use_container_width=True)
 
-        fig = go.Figure()
+        assets_fig = go.Figure()
         for column, color in [
             ("Cash", "#0ea5e9"),
             ("Accounts Receivable", "#22c55e"),
             ("Inventory", "#facc15"),
             ("Fixed Assets", "#6366f1"),
         ]:
-            fig.add_trace(
+            assets_fig.add_trace(
                 go.Scatter(
                     name=column,
                     x=position_df["Year"],
@@ -1899,15 +2642,19 @@ def render_position_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                     marker=dict(color=color),
                 )
             )
-        fig.update_layout(
-            title="Assets over time",
+        assets_fig.update_layout(
+            title="Asset mix",
             yaxis=dict(title="Value", tickprefix="$", separatethousands=True),
-            legend=dict(orientation="h", y=-0.2),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(assets_fig, use_container_width=True)
 
         liabilities_fig = go.Figure()
-        for column, color in [("Accounts Payable", "#f87171"), ("Debt", "#334155"), ("Equity", "#a855f7")]:
+        for column, color in [
+            ("Accounts Payable", "#f87171"),
+            ("Debt", "#334155"),
+            ("Equity", "#a855f7"),
+        ]:
             liabilities_fig.add_trace(
                 go.Scatter(
                     name=column,
@@ -1920,9 +2667,14 @@ def render_position_tab(tab: st.delta_generator.DeltaGenerator) -> None:
         liabilities_fig.update_layout(
             title="Liabilities & equity",
             yaxis=dict(title="Value", tickprefix="$", separatethousands=True),
-            legend=dict(orientation="h", y=-0.2),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
         st.plotly_chart(liabilities_fig, use_container_width=True)
+
+        liquidity_df: pd.DataFrame = results.get("liquidity", pd.DataFrame())
+        if not liquidity_df.empty:
+            st.subheader("Liquidity ratios")
+            st.dataframe(liquidity_df.set_index("Year"), use_container_width=True)
 
 
 def render_cashflow_tab(tab: st.delta_generator.DeltaGenerator) -> None:
@@ -1950,6 +2702,24 @@ def render_cashflow_tab(tab: st.delta_generator.DeltaGenerator) -> None:
         }
         st.plotly_chart(build_cashflow_figure(payload), use_container_width=True)
 
+        chart_payloads: Dict[str, Any] = results.get("chart_payloads", {})
+        detailed_payload = chart_payloads.get("cashflow")
+        if detailed_payload:
+            st.plotly_chart(
+                build_cashflow_forecast_chart(detailed_payload),
+                use_container_width=True,
+            )
+
+        valuation_table = results.get("valuation_table", pd.DataFrame())
+        if not valuation_table.empty:
+            st.subheader("DCF summary schedule")
+            st.dataframe(valuation_table.set_index("Year Label"), use_container_width=True)
+
+        debt_amort = results.get("debt_amortization", pd.DataFrame())
+        if not debt_amort.empty:
+            st.subheader("Debt amortization")
+            st.dataframe(debt_amort.set_index("Year"), use_container_width=True)
+
 
 def render_sensitivity_tab(tab: st.delta_generator.DeltaGenerator) -> None:
     with tab:
@@ -1965,6 +2735,16 @@ def render_sensitivity_tab(tab: st.delta_generator.DeltaGenerator) -> None:
         if sensitivity_df.empty:
             st.info("No sensitivity data available yet.")
             return
+
+        summary_df: pd.DataFrame = results.get("summary", pd.DataFrame())
+        if not summary_df.empty:
+            latest = summary_df.iloc[-1]
+            st.subheader("Current performance snapshot")
+            cols = st.columns(4)
+            cols[0].metric("Revenue", f"${latest['Net Revenue']:,.0f}")
+            cols[1].metric("EBITDA", f"${latest['EBITDA']:,.0f}")
+            cols[2].metric("Net Income", f"${latest['Net Income']:,.0f}")
+            cols[3].metric("Orders", f"{latest['Total Orders']:,.0f}")
 
         st.dataframe(sensitivity_df, use_container_width=True)
 
@@ -1984,11 +2764,55 @@ def render_sensitivity_tab(tab: st.delta_generator.DeltaGenerator) -> None:
         )
         st.plotly_chart(bars, use_container_width=True)
 
+        breakeven = results.get("breakeven", {})
+        margin_safety = results.get("margin_of_safety", {})
+        metrics_cols = st.columns(3)
+        metrics_cols[0].metric(
+            "Break-even revenue",
+            f"${breakeven.get('Break-even Revenue', 0.0):,.0f}",
+        )
+        metrics_cols[1].metric(
+            "Margin of safety",
+            f"{margin_safety.get('Margin of Safety %', 0.0):,.2f}%",
+        )
+        metrics_cols[2].metric(
+            "Contribution margin",
+            f"{breakeven.get('Contribution Margin %', 0.0):,.2f}%",
+        )
+
+        npv_value = results.get("npv", 0.0)
+        irr_value = results.get("irr")
+        payback_year = results.get("payback_year")
+        decision = "Proceed" if npv_value >= 0 else "Re-evaluate"
+        irr_text = f"IRR = {irr_value*100:,.2f}%" if irr_value is not None else "IRR unavailable."
+        st.info(f"**Decision guidance:** {decision}. NPV = ${npv_value:,.0f}. {irr_text}")
+        st.write(
+            f"Payback period: {payback_year if payback_year else 'Not achieved'}"
+        )
+
+        chart_payloads: Dict[str, Any] = results.get("chart_payloads", {})
+        revenue_payload = chart_payloads.get("revenue")
+        if revenue_payload:
+            forecast_payload = {
+                "years": revenue_payload.get("years", []),
+                "net_revenue": revenue_payload.get("net_revenue", []),
+                "gross_margin": [val / 100 if val > 1 else val for val in revenue_payload.get("gross_margin", [])],
+                "ebitda_margin": [val / 100 if val > 1 else val for val in revenue_payload.get("ebitda_margin", [])],
+            }
+            st.plotly_chart(
+                build_revenue_figure(forecast_payload), use_container_width=True
+            )
+
+        top_sensitivity = results.get("top_sensitivity", pd.DataFrame())
+        if not top_sensitivity.empty:
+            st.subheader("Top-rank scenario deltas")
+            st.dataframe(top_sensitivity.set_index("Scenario"), use_container_width=True)
+
 
 def render_advanced_tab(tab: st.delta_generator.DeltaGenerator) -> None:
     with tab:
         st.header("Advanced analysis")
-        st.write("Review valuation signals calculated directly from your manual assumptions.")
+        st.write("Run valuation, risk, and optimization tooling on the offline model outputs.")
 
         results = st.session_state.get("model_results")
         if not results:
@@ -1996,13 +2820,18 @@ def render_advanced_tab(tab: st.delta_generator.DeltaGenerator) -> None:
             return
 
         npv_value = results.get("npv", 0.0)
+        irr_value = results.get("irr")
         payback_year = results.get("payback_year")
         cashflow_df: pd.DataFrame = results.get("cashflow", pd.DataFrame())
+        summary_df: pd.DataFrame = results.get("summary", pd.DataFrame())
 
-        col1, col2 = st.columns(2)
-        col1.metric("Net Present Value", f"${npv_value:,.0f}")
-        payback_text = str(payback_year) if payback_year else "Not achieved"
-        col2.metric("Payback year", payback_text)
+        valuation_cols = st.columns(3)
+        valuation_cols[0].metric("Net Present Value", f"${npv_value:,.0f}")
+        irr_display = f"{irr_value*100:,.2f}%" if irr_value is not None else "n/a"
+        valuation_cols[1].metric("IRR", irr_display)
+        valuation_cols[2].metric(
+            "Payback year", str(payback_year) if payback_year else "Not achieved"
+        )
 
         if not cashflow_df.empty:
             cumulative_fig = go.Figure()
@@ -2021,9 +2850,151 @@ def render_advanced_tab(tab: st.delta_generator.DeltaGenerator) -> None:
             )
             st.plotly_chart(cumulative_fig, use_container_width=True)
 
-        st.write(
-            "These metrics use a simplified valuation approach (NPV based on annual net cash"
-            " flows and the prevailing interest rate from the Financing schedule)."
+        st.caption(
+            "Valuation metrics reference the manual cash flows, discount assumptions, and net income derived from your schedules."
+        )
+
+        st.subheader("Monte Carlo simulation")
+        mc_iterations = st.slider("Iterations", 500, 5000, 2000, step=500)
+        revenue_sigma = st.slider("Revenue volatility", 0.0, 0.3, 0.1, step=0.01)
+        cost_sigma = st.slider("Cost volatility", 0.0, 0.3, 0.05, step=0.01)
+        discount_rate = st.slider("Discount rate", 0.01, 0.3, DEFAULT_DISCOUNT_RATE, step=0.01)
+        cash_flows = cashflow_df["Net Cash Flow"].tolist() if not cashflow_df.empty else []
+        if st.button("Run Monte Carlo", use_container_width=True):
+            mc_df = monte_carlo_analysis(
+                cash_flows, mc_iterations, revenue_sigma, cost_sigma, discount_rate
+            )
+            if mc_df.empty:
+                st.warning("No cash flows available for simulation.")
+            else:
+                summary = mc_df.describe(percentiles=[0.1, 0.5, 0.9]).T
+                st.dataframe(summary, use_container_width=True)
+                st.plotly_chart(
+                    go.Figure(
+                        data=[
+                            go.Histogram(
+                                x=mc_df["NPV"], nbinsx=40, marker_color="#2563eb"
+                            )
+                        ],
+                        layout=go.Layout(title="NPV distribution"),
+                    ),
+                    use_container_width=True,
+                )
+
+        st.subheader("What-if overlays")
+        if not summary_df.empty:
+            base_row = summary_df.iloc[-1]
+            driver = st.selectbox(
+                "Driver to scale",
+                ["Net Revenue", "Gross Profit", "EBITDA", "Net Income", "Total Orders"],
+            )
+            multiplier = st.slider("Multiplier", 0.5, 1.5, 1.1, step=0.05)
+            if st.button("Apply what-if", use_container_width=True):
+                adjusted = base_row.copy()
+                if driver in adjusted:
+                    adjusted[driver] = adjusted[driver] * multiplier
+                updated_margin = (
+                    adjusted.get("Net Income", 0.0) / adjusted.get("Net Revenue", 1.0)
+                ) * 100.0 if adjusted.get("Net Revenue", 0.0) else 0.0
+                st.success(
+                    f"{driver} scaled by {multiplier:.2f}. Updated Net Income: ${adjusted.get('Net Income', 0.0):,.0f}. "
+                    f"Net margin: {updated_margin:,.2f}%"
+                )
+
+        st.subheader("Decision analysis")
+        scenario_df: pd.DataFrame = results.get("scenario_summary", pd.DataFrame())
+        if scenario_df.empty:
+            st.info("Provide assumptions to generate scenario analysis.")
+        else:
+            probabilities = []
+            prob_cols = st.columns(len(scenario_df))
+            for idx, (_, row) in enumerate(scenario_df.iterrows()):
+                probabilities.append(
+                    prob_cols[idx].number_input(
+                        f"{row['Scenario']} probability",
+                        min_value=0.0,
+                        max_value=1.0,
+                        value=round(1.0 / len(scenario_df), 2),
+                        key=f"scenario_prob_{idx}",
+                    )
+                )
+            total_prob = sum(probabilities) or 1.0
+            normalized = [p / total_prob for p in probabilities]
+            scenario_df = scenario_df.copy()
+            scenario_df["Probability"] = normalized
+            scenario_df["Expected Value"] = scenario_df["NPV"] * scenario_df["Probability"]
+            st.dataframe(scenario_df.set_index("Scenario"), use_container_width=True)
+            st.metric(
+                "Expected NPV", f"${scenario_df['Expected Value'].sum():,.0f}"
+            )
+
+        st.subheader("Goal-seek profit margin")
+        target_margin = st.slider("Target net margin %", -20.0, 40.0, 15.0, step=1.0)
+        if not summary_df.empty:
+            base_row = summary_df.iloc[-1]
+            base_margin = base_row.get("Net Margin %", 0.0)
+            multiplier, achieved = goal_seek_margin(
+                target_margin, base_row.get("Net Revenue", 0.0), base_margin
+            )
+            st.write(
+                f"Multiplier required on net margin: {multiplier:,.2f}. Projected margin: {achieved:,.2f}%"
+            )
+
+        st.subheader("Schedule risk simulation")
+        if not cashflow_df.empty:
+            rng = np.random.default_rng()
+            base_duration = len(cashflow_df) * 12
+            optimistic = st.slider("Optimistic months", 6, base_duration, 12, step=6)
+            pessimistic = st.slider(
+                "Pessimistic months", base_duration, base_duration * 2, base_duration + 12, step=6
+            )
+            trials = rng.triangular(optimistic, base_duration, pessimistic, size=2000)
+            st.write(
+                f"Expected completion: {np.mean(trials):.1f} months (p90 = {np.percentile(trials, 90):.1f} months)"
+            )
+
+        st.subheader("Neural-style demand forecast")
+        revenue_series = summary_df["Net Revenue"].tolist() if not summary_df.empty else []
+        if revenue_series:
+            forecast_periods = st.slider("Forecast periods", 1, 5, 3)
+            forecast_values = simple_forecast(revenue_series, forecast_periods)
+            forecast_years = [
+                summary_df.iloc[-1]["Year"] + idx for idx in range(1, len(forecast_values) + 1)
+            ]
+            forecast_df = pd.DataFrame(
+                {"Year": forecast_years, "Forecast Revenue": forecast_values}
+            )
+            st.dataframe(forecast_df.set_index("Year"), use_container_width=True)
+
+        st.subheader("Budget optimization (Evolver)")
+        performance_df: pd.DataFrame = results.get("performance", pd.DataFrame())
+        if not performance_df.empty:
+            spend_options = [
+                "Marketing Spend",
+                "Fulfillment Cost",
+                "Staffing Cost",
+                "Benefits",
+                "Overheads",
+            ]
+            spend_choice = st.selectbox("Spend line to constrain", spend_options)
+            target_spend = st.number_input(
+                "Target spend (per year)",
+                min_value=0.0,
+                value=float(
+                    performance_df[spend_choice].iloc[-1]
+                    if spend_choice in performance_df
+                    else 0.0
+                ),
+            )
+            optimized = performance_df.copy()
+            if spend_choice in optimized:
+                optimized[spend_choice] = np.minimum(
+                    optimized[spend_choice], target_spend
+                )
+            st.dataframe(optimized.set_index("Year"), use_container_width=True)
+
+        st.caption(
+            "Advanced tooling approximates Monte Carlo, what-if analysis, decision trees, goal seek, schedule risk, neural-style forecasts, and budget optimization using the offline model outputs."
         )
 
 
