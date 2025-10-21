@@ -1391,6 +1391,32 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
     asset_schedule_df, asset_totals = build_asset_schedule(
         sanitized.get("Asset Register"), years
     )
+    asset_rollforward_df = (
+        pd.DataFrame(
+            [
+                {
+                    "Year": year,
+                    "Beginning Balance": values.get("beginning", 0.0),
+                    "Additions": values.get("additions", 0.0),
+                    "Depreciation": values.get("depreciation", 0.0),
+                    "Cumulative Depreciation": values.get("cumulative", 0.0),
+                    "Ending Balance": values.get("ending", 0.0),
+                }
+                for year, values in sorted(asset_totals.items())
+            ]
+        )
+        if asset_totals
+        else pd.DataFrame(
+            columns=[
+                "Year",
+                "Beginning Balance",
+                "Additions",
+                "Depreciation",
+                "Cumulative Depreciation",
+                "Ending Balance",
+            ]
+        )
+    )
 
     summary_rows: List[Dict[str, Any]] = []
     performance_rows: List[Dict[str, Any]] = []
@@ -2040,6 +2066,7 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         "chart_payloads": chart_payloads,
         "debt_amortization": debt_amortization_df,
         "asset_schedule": asset_schedule_df,
+        "asset_rollforward": asset_rollforward_df,
         "metrics_cards": metrics_cards,
         "traffic": traffic_df,
         "profitability": profitability_df,
@@ -2846,6 +2873,7 @@ def render_metrics_tab(tab: st.delta_generator.DeltaGenerator) -> None:
         depreciation_matrix = results.get("depreciation_matrix", pd.DataFrame())
         equity_debt_matrix = results.get("equity_debt_matrix", pd.DataFrame())
         asset_schedule = results.get("asset_schedule", pd.DataFrame())
+        asset_rollforward = results.get("asset_rollforward", pd.DataFrame())
         matrix_cols = st.columns(2)
         with matrix_cols[0]:
             if depreciation_matrix.empty:
@@ -2870,6 +2898,18 @@ def render_metrics_tab(tab: st.delta_generator.DeltaGenerator) -> None:
             if {"Year", "Asset"}.issubset(display_schedule.columns):
                 display_schedule = display_schedule.set_index(["Year", "Asset"])
             st.dataframe(display_schedule, use_container_width=True)
+
+        if not asset_rollforward.empty:
+            st.subheader("Asset additions roll-forward")
+            st.dataframe(
+                asset_rollforward.set_index("Year"), use_container_width=True
+            )
+            st.info(
+                "Add new assets on the Input & Assumptions → Asset Register table. "
+                "Each row seeds an addition in the asset roll-forward, drives "
+                "depreciation for the remaining horizon, and updates the "
+                "income statement, cash flow, and balance sheet automatically."
+            )
 
         chart_payloads: Dict[str, Any] = results.get("chart_payloads", {})
 

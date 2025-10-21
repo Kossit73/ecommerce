@@ -116,6 +116,19 @@ console or the Streamlit app.
    saving the rebuilt workbook inputs. A guidance panel inside every schedule
    outlines the best way to edit each line item so you know which fields to
    tweak when assumptions change.
+
+#### Showing asset additions in Streamlit
+
+- Navigate to **Input & Assumptions → Asset Register** and add a row for each
+  purchase. Provide the acquisition year, a descriptive asset name, the amount
+  invested, and its depreciation rate (as a percentage or decimal).
+- After you apply the assumptions, the **Key Financial Metrics** tab surfaces an
+  **Asset additions roll-forward** table. This summary shows the beginning
+  balance, new additions, annual depreciation, cumulative depreciation, and
+  ending balance for every year.
+- The same totals feed straight into the depreciation matrix, the income
+  statement, the cash-flow schedule, and the balance sheet, so you can verify
+  that new assets immediately flow through the entire model.
 ## Project Structure
 
 ```
