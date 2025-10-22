@@ -2651,13 +2651,28 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                 st.session_state[edit_state_key] = None
 
             stored_table = st.session_state.get(data_state_key)
+            frame_coerced = _coerce_schedule_frame(frame, schedule["columns"])
             if stored_table is None:
-                st.session_state[data_state_key] = frame.copy()
+                working_table = frame_coerced.copy()
             else:
-                coerced = _coerce_schedule_frame(stored_table, schedule["columns"])
-                if not _dataframes_equal(coerced, frame):
-                    coerced = frame.copy()
-                st.session_state[data_state_key] = coerced.copy()
+                stored_coerced = _coerce_schedule_frame(
+                    stored_table, schedule["columns"]
+                )
+                allowed_years = set(current_years)
+                if "Year" in stored_coerced.columns and allowed_years:
+                    stored_years = pd.to_numeric(
+                        stored_coerced["Year"], errors="coerce"
+                    ).dropna()
+                    if not set(stored_years.astype(int)).issubset(allowed_years):
+                        stored_coerced = frame_coerced.copy()
+                columns_match = list(frame_coerced.columns) == list(
+                    stored_coerced.columns
+                )
+                if columns_match:
+                    working_table = stored_coerced.copy()
+                else:
+                    working_table = frame_coerced.copy()
+            st.session_state[data_state_key] = working_table.copy()
 
             working_table = _coerce_schedule_frame(
                 st.session_state[data_state_key], schedule["columns"]
