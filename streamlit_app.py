@@ -20,7 +20,29 @@ except Exception:  # pragma: no cover - fallback when package is unavailable
 # Streamlit configuration & constants
 # ---------------------------------------------------------------------------
 
-st.set_page_config(page_title="Ecommerce Financial Model", layout="wide", page_icon="💼")
+st.set_page_config(
+    page_title="Ecommerce Financial Model",
+    layout="wide",
+    page_icon="💼",
+    initial_sidebar_state="collapsed",
+)
+
+
+def inject_global_styles() -> None:
+    """Remove the default Streamlit sidebar chrome so the layout stays centered."""
+
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] {display: none !important;}
+        [data-testid="collapsedControl"] {display: none !important;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+inject_global_styles()
 
 DEFAULT_TAX_RATE = 0.25
 DEFAULT_DISCOUNT_RATE = 0.10
