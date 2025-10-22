@@ -160,6 +160,7 @@ financial_management_api/
 
 - The Streamlit experience now runs entirely on the schedules you input—apply assumptions and every tab refreshes without relying on the FastAPI backend.
 - The static HTML console still supports calling the API if you host it, but it also seeds the same bundled assumption template so you can experiment offline.
+- Valuation metrics (NPV/IRR) are derived from **free cash flow**—operating cash flow plus investing cash flow—so financing inflows/outflows no longer distort the internal rate of return. Make sure your inputs include at least one outflow (e.g., capex or equity distributions) for a finite IRR.
 - If you plan to extend the backend, keep `backend-requirements.txt` handy for local development; Streamlit deployments only need the lightweight `requirements.txt` bundle.
 
 ## Troubleshooting

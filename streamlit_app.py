@@ -1426,7 +1426,7 @@ def build_discount_table(cash_flows: Sequence[float], rate: float) -> pd.DataFra
         rows.append(
             {
                 "Year": idx,
-                "Net Cash Flow": cash_flow,
+                "Free Cash Flow": cash_flow,
                 "Discount Factor": discount_factor,
                 "Discounted Cash Flow": discounted_value,
             }
@@ -1917,6 +1917,7 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
 
         cfo = net_income + depreciation - delta_working_capital
         cfi = -capex
+        free_cash_flow = cfo + cfi
         cff = equity_raised + debt_issued - dividends - schedule_principal
         net_cash_flow = cfo + cfi + cff
         cumulative_cash += net_cash_flow
@@ -2067,6 +2068,7 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
                 "Cash Flow from Operations": cfo,
                 "Cash Flow from Investing": cfi,
                 "Cash Flow from Financing": cff,
+                "Free Cash Flow": free_cash_flow,
                 "Net Cash Flow": net_cash_flow,
                 "Ending Cash": cumulative_cash,
             }
@@ -2196,7 +2198,9 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
     profitability_df = pd.DataFrame(profitability_rows)
     consideration_df = pd.DataFrame(consideration_rows)
 
-    cash_flows = cashflow_df["Net Cash Flow"].to_list() if not cashflow_df.empty else []
+    cash_flows = (
+        cashflow_df["Free Cash Flow"].to_list() if not cashflow_df.empty else []
+    )
     discount_rate = to_decimal(
         avg_numeric(sanitized["Financing Activities"], "Interest Rate"), DEFAULT_DISCOUNT_RATE
     )
@@ -2205,7 +2209,9 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
     ] if discount_rate is not None and cash_flows else []
     npv = sum(discounted) if discounted else 0.0
     irr_value = compute_irr_value(cash_flows)
-    discount_table = build_discount_table(cash_flows, discount_rate if discount_rate else 0.0)
+    discount_table = build_discount_table(
+        cash_flows, discount_rate if discount_rate else 0.0
+    )
     cumulative = cashflow_df["Ending Cash"].tolist() if not cashflow_df.empty else []
     payback_period = None
     if cumulative:
@@ -2331,6 +2337,12 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
             if not cashflow_df.empty
             else [],
             "financing": cashflow_df["Cash Flow from Financing"].tolist()
+            if not cashflow_df.empty
+            else [],
+            "free_cash_flow": cashflow_df["Free Cash Flow"].tolist()
+            if not cashflow_df.empty
+            else [],
+            "net_cash_flow": cashflow_df["Net Cash Flow"].tolist()
             if not cashflow_df.empty
             else [],
         },
@@ -2557,11 +2569,22 @@ def build_cashflow_figure(payload: Dict[str, Any]) -> go.Figure:
     ops = payload.get("cash_from_operations") or []
     investing = payload.get("cash_from_investing") or []
     net = payload.get("net_cash_flow") or []
+    free_cash = payload.get("free_cash_flow") or []
     fig = go.Figure()
     if years and any(pd.notna(val) for val in ops):
         fig.add_bar(name="Operations", x=years, y=ops, marker_color="#22c55e")
     if years and any(pd.notna(val) for val in investing):
         fig.add_bar(name="Investing", x=years, y=investing, marker_color="#f59e0b")
+    if years and any(pd.notna(val) for val in free_cash):
+        fig.add_trace(
+            go.Scatter(
+                name="Free Cash Flow",
+                x=years,
+                y=free_cash,
+                mode="lines+markers",
+                marker=dict(color="#0ea5e9"),
+            )
+        )
     if years and any(pd.notna(val) for val in net):
         fig.add_trace(
             go.Scatter(
@@ -2569,7 +2592,7 @@ def build_cashflow_figure(payload: Dict[str, Any]) -> go.Figure:
                 x=years,
                 y=net,
                 mode="lines+markers",
-                marker=dict(color="#0ea5e9"),
+                marker=dict(color="#a855f7"),
             )
         )
     fig.update_layout(
@@ -2679,6 +2702,8 @@ def build_cashflow_forecast_chart(payload: Dict[str, Any]) -> go.Figure:
         ("operations", "Operations", "#22c55e"),
         ("investing", "Investing", "#f97316"),
         ("financing", "Financing", "#3b82f6"),
+        ("free_cash_flow", "Free Cash Flow", "#0ea5e9"),
+        ("net_cash_flow", "Net Cash Flow", "#a855f7"),
     ]:
         fig.add_trace(
             go.Scatter(
@@ -3586,6 +3611,7 @@ def render_cashflow_tab(tab: st.delta_generator.DeltaGenerator) -> None:
             "years": cashflow_df["Year"].tolist(),
             "cash_from_operations": cashflow_df["Cash Flow from Operations"].tolist(),
             "cash_from_investing": cashflow_df["Cash Flow from Investing"].tolist(),
+            "free_cash_flow": cashflow_df["Free Cash Flow"].tolist(),
             "net_cash_flow": cashflow_df["Net Cash Flow"].tolist(),
         }
         st.plotly_chart(build_cashflow_figure(payload), use_container_width=True)
@@ -3775,7 +3801,9 @@ def render_advanced_tab(tab: st.delta_generator.DeltaGenerator) -> None:
         cashflow_df: pd.DataFrame = results.get("cashflow", pd.DataFrame())
         summary_df: pd.DataFrame = results.get("summary", pd.DataFrame())
 
-        cash_flows = cashflow_df["Net Cash Flow"].tolist() if not cashflow_df.empty else []
+        cash_flows = (
+            cashflow_df["Free Cash Flow"].tolist() if not cashflow_df.empty else []
+        )
         irr_value = compute_irr_value(cash_flows) if cash_flows else None
         if irr_value is None:
             irr_value = results.get("irr")
