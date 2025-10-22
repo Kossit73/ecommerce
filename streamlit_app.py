@@ -77,6 +77,7 @@ SENSITIVITY_STEPS = [-0.1, -0.05, 0.05, 0.1]
 DEFAULT_PRODUCTION_START_YEAR = 2023
 DEFAULT_PRODUCTION_END_YEAR = 2027
 PRODUCTION_YEAR_CHOICES = list(range(2000, 2101))
+CONSISTENCY_TOLERANCE = 1e-2
 
 
 def default_production_years() -> List[int]:
@@ -806,6 +807,143 @@ def to_decimal(value: Any, default: float = 0.0) -> float:
     if abs(number) > 1:
         return number / 100.0
     return number
+
+
+def _normalize_year_label(year: Any) -> Any:
+    try:
+        if pd.isna(year):  # type: ignore[arg-type]
+            return "n/a"
+    except TypeError:
+        pass
+    try:
+        return int(year)
+    except (TypeError, ValueError):
+        return year if year is not None else "n/a"
+
+
+def _record_consistency_check(
+    checks: List[Dict[str, Any]],
+    year: Any,
+    label: str,
+    difference: Any,
+) -> None:
+    normalized_year = _normalize_year_label(year)
+    diff_value = to_number(difference, None)
+    if diff_value is None:
+        status = "Fail"
+        display_diff: Optional[float] = None
+    else:
+        status = "Pass" if abs(diff_value) <= CONSISTENCY_TOLERANCE else "Fail"
+        display_diff = round(diff_value, 2)
+    checks.append(
+        {
+            "Year": normalized_year,
+            "Check": label,
+            "Difference": display_diff,
+            "Status": status,
+        }
+    )
+
+
+def build_consistency_report(
+    income_df: pd.DataFrame,
+    position_df: pd.DataFrame,
+    cashflow_df: pd.DataFrame,
+) -> Tuple[pd.DataFrame, str]:
+    checks: List[Dict[str, Any]] = []
+
+    if not income_df.empty:
+        for _, row in income_df.iterrows():
+            year = row.get("Year")
+            net_revenue = to_number(row.get("Net Revenue"), 0.0) or 0.0
+            cogs = to_number(row.get("COGS"), 0.0) or 0.0
+            gross_profit = to_number(row.get("Gross Profit"), 0.0) or 0.0
+            operating_expense = to_number(row.get("Operating Expense"), 0.0) or 0.0
+            ebitda = to_number(row.get("EBITDA"), 0.0) or 0.0
+            depreciation = to_number(row.get("Depreciation"), 0.0) or 0.0
+            ebit = to_number(row.get("EBIT"), 0.0) or 0.0
+            interest = to_number(row.get("Interest"), 0.0) or 0.0
+            tax = to_number(row.get("Tax"), 0.0) or 0.0
+            net_income = to_number(row.get("Net Income"), 0.0) or 0.0
+
+            _record_consistency_check(
+                checks,
+                year,
+                "Gross profit matches revenue minus COGS",
+                gross_profit - (net_revenue - cogs),
+            )
+            _record_consistency_check(
+                checks,
+                year,
+                "EBITDA matches gross profit minus operating expense",
+                ebitda - (gross_profit - operating_expense),
+            )
+            _record_consistency_check(
+                checks,
+                year,
+                "EBIT matches EBITDA minus depreciation",
+                ebit - (ebitda - depreciation),
+            )
+            _record_consistency_check(
+                checks,
+                year,
+                "Net income matches EBIT after interest & tax",
+                net_income - (ebit + interest + tax),
+            )
+
+    if not position_df.empty:
+        for _, row in position_df.iterrows():
+            year = row.get("Year")
+            assets = (
+                to_number(row.get("Cash"), 0.0)
+                + to_number(row.get("Accounts Receivable"), 0.0)
+                + to_number(row.get("Inventory"), 0.0)
+                + to_number(row.get("Fixed Assets"), 0.0)
+            )
+            liabilities_and_equity = (
+                to_number(row.get("Accounts Payable"), 0.0)
+                + to_number(row.get("Debt"), 0.0)
+                + to_number(row.get("Equity"), 0.0)
+            )
+            _record_consistency_check(
+                checks,
+                year,
+                "Assets equal liabilities plus equity",
+                assets - liabilities_and_equity,
+            )
+
+    if not cashflow_df.empty:
+        sorted_cashflow = cashflow_df.sort_values("Year")
+        prior_cash = 0.0
+        for _, row in sorted_cashflow.iterrows():
+            year = row.get("Year")
+            cfo = to_number(row.get("Cash Flow from Operations"), 0.0) or 0.0
+            cfi = to_number(row.get("Cash Flow from Investing"), 0.0) or 0.0
+            cff = to_number(row.get("Cash Flow from Financing"), 0.0) or 0.0
+            net_cf = to_number(row.get("Net Cash Flow"), 0.0) or 0.0
+            ending_cash = to_number(row.get("Ending Cash"), 0.0) or 0.0
+
+            _record_consistency_check(
+                checks,
+                year,
+                "Net cash flow equals section totals",
+                net_cf - (cfo + cfi + cff),
+            )
+            _record_consistency_check(
+                checks,
+                year,
+                "Ending cash rolls forward correctly",
+                ending_cash - (prior_cash + net_cf),
+            )
+            prior_cash = ending_cash
+
+    # Provide a quick roll-up status even when checks are empty.
+    if not checks:
+        return pd.DataFrame(columns=["Year", "Check", "Difference", "Status"]), "Unknown"
+
+    checks_df = pd.DataFrame(checks)
+    overall_status = "Pass" if (checks_df["Status"] == "Pass").all() else "Fail"
+    return checks_df, overall_status
 
 
 def sum_numeric(frame: pd.DataFrame, column: str) -> float:
@@ -2160,6 +2298,10 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
             ),
         }
 
+    consistency_df, consistency_status = build_consistency_report(
+        income_statement_df, position_df, cashflow_df
+    )
+
     chart_payloads = {
         "revenue": {
             "years": summary_df["Year"].tolist() if not summary_df.empty else [],
@@ -2260,6 +2402,8 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         "asset_schedule": asset_schedule_df,
         "asset_rollforward": asset_rollforward_df,
         "metrics_cards": metrics_cards,
+        "consistency_checks": consistency_df,
+        "consistency_status": consistency_status,
         "traffic": traffic_df,
         "profitability": profitability_df,
         "customer_consideration": consideration_df,
@@ -3079,6 +3223,31 @@ def render_metrics_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                     lambda val: f"{val*100:,.2f}%" if pd.notna(val) else "n/a"
                 )
             st.dataframe(formatted.set_index("Scenario"), use_container_width=True)
+
+        consistency_df: pd.DataFrame = results.get("consistency_checks", pd.DataFrame())
+        consistency_status: Optional[str] = results.get("consistency_status")
+        if not consistency_df.empty:
+            st.subheader("Model consistency diagnostics")
+            if consistency_status and consistency_status.lower() == "pass":
+                st.success(
+                    "All core statements reconcile within the configured tolerance."
+                )
+            else:
+                st.warning(
+                    "Some tie-outs fall outside the tolerance. Review the failing rows below."
+                )
+            display_checks = consistency_df.copy()
+            display_checks["Difference"] = display_checks["Difference"].apply(
+                lambda val: f"{val:,.2f}" if pd.notna(val) else "n/a"
+            )
+            st.dataframe(
+                display_checks.set_index(["Year", "Check"]),
+                use_container_width=True,
+            )
+            st.caption(
+                "Diagnostics highlight the gap between calculated and expected values. "
+                f"Checks pass when the absolute difference is ≤ {CONSISTENCY_TOLERANCE:.2f}."
+            )
 
         key_metrics = st.columns(3)
         npv_value = results.get("npv", 0.0)

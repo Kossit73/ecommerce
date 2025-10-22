@@ -6,6 +6,7 @@ The repository now ships two primary client surfaces — the offline `streamlit_
 ## Verification Highlights
 - **Workbook resolution.** The `EcommerceModel` previously hard-coded `data/financial_assumptions.xlsx`. The repo only includes `financial_assumptions.xlsx` in the root, so fresh loads failed. The model now resolves the workbook by probing both locations before falling back to `data/` so deployments succeed regardless of where the file lives.
 - **Streamlit pipeline.** The offline pipeline produces synchronized financial statements, scenario summaries, and analytics derived directly from the schedules entered on the Input tab. The helper functions at the top of `streamlit_app.py` clamp the production horizon, normalize each schedule, and recompute the model whenever state changes. The derived outputs feed every downstream tab (Key Metrics, Performance, Position, Cash Flow, Sensitivity, Advanced Analysis).
+- **Statement diagnostics.** `streamlit_app.py` now runs automated consistency checks across the income statement, balance sheet, and cash-flow schedule after each recomputation. Any tie-outs that drift beyond a 0.01 tolerance are surfaced to the user via the Key Financial Metrics tab.
 - **Static console.** The static frontend (`frontend/assets/js/*.js`) continues to provide a zero-dependency alternative that mirrors the same workflows when a browser is preferred over Streamlit.
 
 ## Observed Strengths

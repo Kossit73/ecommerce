@@ -122,6 +122,12 @@ console or the Streamlit app.
    schedules, statements, and analytics stay within that range, so forecasts no
    longer extend beyond your selected production horizon.
 
+5. Review the **Model consistency diagnostics** section on the Key Financial
+   Metrics tab after each update. The Streamlit app now reconciles income
+   statement, balance sheet, and cash-flow tie-outs automatically and flags any
+   differences that exceed a 0.01 tolerance so you can correct issues before
+   moving on to scenario or risk analysis.
+
 #### Showing asset additions in Streamlit
 
 - Navigate to **Input & Assumptions → Asset Register** and add a row for each
