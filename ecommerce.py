@@ -1,8 +1,25 @@
 import pandas as pd
 import numpy as np
 import numpy_financial as npf
-from scipy.stats import norm, lognorm, uniform, expon, binom, poisson, geom, bernoulli, chi2, gamma, weibull_min, hypergeom,multinomial, beta, f
+from pathlib import Path
 from scipy import stats
+from scipy.stats import (
+    bernoulli,
+    beta,
+    binom,
+    chi2,
+    expon,
+    f,
+    gamma,
+    geom,
+    hypergeom,
+    lognorm,
+    multinomial,
+    norm,
+    poisson,
+    uniform,
+    weibull_min,
+)
 from scipy.optimize import minimize
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
@@ -22,11 +39,26 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from functools import wraps
 import signal
 import threading
-import plotly.graph_objects as go
 import plotly.io as pio
 from xlsxwriter.exceptions import DuplicateWorksheetName
 
-EXCEL_FILE = "data/financial_assumptions.xlsx"
+
+def _resolve_default_workbook() -> Path:
+    """Return the first existing financial assumptions workbook."""
+
+    candidates = [
+        Path("data") / "financial_assumptions.xlsx",
+        Path("financial_assumptions.xlsx"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    # Ensure the data directory exists so future saves succeed.
+    candidates[0].parent.mkdir(parents=True, exist_ok=True)
+    return candidates[0]
+
+
+EXCEL_FILE = str(_resolve_default_workbook())
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -78,7 +110,7 @@ class EcommerceModel:
         self.session_state = {'years_data': {}}
         self.scenarios = {'Base': None, 'Best': None, 'Worst': None}
         self.charts = {}
-        self.current_file = 'data/financial_assumptions.xlsx'
+        self.current_file = EXCEL_FILE
         self.inflation_rate = 0.02
         self.labor_rate = 0.03
         self.risk_free_rate = 0.03
