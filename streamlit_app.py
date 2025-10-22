@@ -124,7 +124,7 @@ def set_production_horizon(start_year: int, end_year: int) -> None:
     tables: Dict[str, pd.DataFrame] = st.session_state.get("assumption_tables", {})
     synced = sync_schedule_years(years, tables)
     st.session_state["assumption_tables"] = synced
-    refresh_model_from_assumptions(synced)
+    refresh_model_from_assumptions(synced, force=True)
 EXECUTIVE_ROLES = [
     "CEO Salary",
     "COO Salary",
@@ -616,7 +616,9 @@ def ensure_assumption_tables() -> None:
             for schedule in ASSUMPTION_SCHEDULES
         }
         st.session_state["assumption_tables"] = sync_schedule_years(years, initial_tables)
-        refresh_model_from_assumptions(st.session_state["assumption_tables"])
+        refresh_model_from_assumptions(
+            st.session_state["assumption_tables"], force=True
+        )
 
 
 def get_assumption_years() -> List[int]:
@@ -646,7 +648,9 @@ def reset_assumption_tables(years: Optional[Iterable[int]] = None) -> None:
     st.session_state["assumption_tables"] = sync_schedule_years(base_years, fresh_tables)
     st.session_state["assumptions_raw"] = []
     st.session_state.pop("model_tables_signature", None)
-    refresh_model_from_assumptions(st.session_state["assumption_tables"])
+    refresh_model_from_assumptions(
+        st.session_state["assumption_tables"], force=True
+    )
 
 
 def split_assumptions_into_tables(df: pd.DataFrame, years: Iterable[int]) -> Dict[str, pd.DataFrame]:
@@ -694,7 +698,10 @@ def combine_assumption_tables(tables: Dict[str, pd.DataFrame]) -> pd.DataFrame:
 
 
 def refresh_model_from_assumptions(
-    tables: Dict[str, pd.DataFrame], combined_df: Optional[pd.DataFrame] = None
+    tables: Dict[str, pd.DataFrame],
+    combined_df: Optional[pd.DataFrame] = None,
+    *,
+    force: bool = False,
 ) -> bool:
     if not isinstance(tables, dict):
         return False
@@ -703,7 +710,8 @@ def refresh_model_from_assumptions(
     if combined_df is None:
         combined_df = combine_assumption_tables(tables)
     if (
-        signature == existing_signature
+        not force
+        and signature == existing_signature
         and "model_results" in st.session_state
         and "assumptions_raw" in st.session_state
     ):
@@ -734,7 +742,9 @@ def set_assumptions_data(rows: List[Dict[str, Any]]) -> None:
     st.session_state["assumption_years"] = years
     tables = split_assumptions_into_tables(df, years)
     st.session_state["assumption_tables"] = sync_schedule_years(years, tables)
-    refresh_model_from_assumptions(st.session_state["assumption_tables"])
+    refresh_model_from_assumptions(
+        st.session_state["assumption_tables"], force=True
+    )
 
 
 def _build_editor_key(name: str) -> str:
@@ -2933,7 +2943,9 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                 st.session_state[data_state_key] = (
                     computed_tables.get(schedule["name"], pd.DataFrame()).copy()
                 )
-        refresh_model_from_assumptions(st.session_state["assumption_tables"])
+        refresh_model_from_assumptions(
+            st.session_state["assumption_tables"], force=True
+        )
 
         if st.button("Apply assumptions", type="primary"):
             combined_df = combine_assumption_tables(st.session_state["assumption_tables"])
@@ -2942,7 +2954,9 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
             else:
                 with st.spinner("Rebuilding dashboards from manual inputs..."):
                     refresh_model_from_assumptions(
-                        st.session_state["assumption_tables"], combined_df
+                        st.session_state["assumption_tables"],
+                        combined_df,
+                        force=True,
                     )
                 st.success("Assumptions applied. All tabs now reflect your manual inputs.")
 
