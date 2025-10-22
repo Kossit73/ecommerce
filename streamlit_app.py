@@ -1520,6 +1520,7 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
     )
 
     summary_rows: List[Dict[str, Any]] = []
+    income_statement_rows: List[Dict[str, Any]] = []
     performance_rows: List[Dict[str, Any]] = []
     position_rows: List[Dict[str, Any]] = []
     cashflow_rows: List[Dict[str, Any]] = []
@@ -1643,7 +1644,7 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         property_cost = _sum_numeric_columns(property_df)
         legal_cost = _sum_numeric_columns(legal)
 
-        operating_expenses = (
+        operating_expense_core = (
             marketing_spend
             + fulfillment_cost
             + warehouse_rent
@@ -1651,14 +1652,13 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
             + staffing_cost
             + executive_comp
             + benefits_total
-            + overhead_salaries
-            + office_rent
-            + professional_fees
-            + property_cost
-            + legal_cost
         )
+        general_admin_expense = (
+            overhead_salaries + office_rent + professional_fees + property_cost + legal_cost
+        )
+        operating_expense_total = operating_expense_core + general_admin_expense
 
-        ebitda = gross_profit - operating_expenses
+        ebitda = gross_profit - operating_expense_total
         ebit = ebitda - depreciation
 
         interest_rate_input = to_decimal(avg_numeric(financing, "Interest Rate"))
@@ -1718,20 +1718,7 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         gross_margin_pct = (gross_profit / net_revenue * 100.0) if net_revenue else 0.0
         ebitda_margin_pct = (ebitda / net_revenue * 100.0) if net_revenue else 0.0
         net_margin_pct = (net_income / net_revenue * 100.0) if net_revenue else 0.0
-        operating_costs = (
-            marketing_spend
-            + fulfillment_cost
-            + warehouse_rent
-            + other_operating
-            + staffing_cost
-            + executive_comp
-            + benefits_total
-            + overhead_salaries
-            + office_rent
-            + professional_fees
-            + property_cost
-            + legal_cost
-        )
+        operating_costs = operating_expense_total
         contribution_margin = net_revenue - cogs - marketing_spend - fulfillment_cost
         contribution_margin_pct = (
             (contribution_margin / net_revenue * 100.0) if net_revenue else 0.0
@@ -1754,14 +1741,40 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         summary_rows.append(
             {
                 "Year": year,
+                "Gross Revenue": gross_order_value,
                 "Net Revenue": net_revenue,
+                "COGS": cogs,
                 "Gross Profit": gross_profit,
+                "Operating Expense": operating_expense_total,
+                "General Admin": general_admin_expense,
+                "Depreciation": depreciation,
                 "EBITDA": ebitda,
+                "EBIT": ebit,
+                "Interest": -interest_total,
+                "Tax": -taxes,
                 "Net Income": net_income,
                 "Gross Margin %": gross_margin_pct,
                 "EBITDA Margin %": ebitda_margin_pct,
                 "Net Margin %": net_margin_pct,
                 "Total Orders": total_orders,
+            }
+        )
+
+        income_statement_rows.append(
+            {
+                "Year": year,
+                "Gross Revenue": gross_order_value,
+                "Net Revenue": net_revenue,
+                "COGS": cogs,
+                "Gross Profit": gross_profit,
+                "Operating Expense": operating_expense_total,
+                "EBITDA": ebitda,
+                "General Admin": general_admin_expense,
+                "Depreciation": depreciation,
+                "EBIT": ebit,
+                "Interest": -interest_total,
+                "Tax": -taxes,
+                "Net Income": net_income,
             }
         )
 
@@ -1929,6 +1942,24 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         )
 
     summary_df = pd.DataFrame(summary_rows)
+    income_statement_df = pd.DataFrame(
+        income_statement_rows,
+        columns=[
+            "Year",
+            "Gross Revenue",
+            "Net Revenue",
+            "COGS",
+            "Gross Profit",
+            "Operating Expense",
+            "EBITDA",
+            "General Admin",
+            "Depreciation",
+            "EBIT",
+            "Interest",
+            "Tax",
+            "Net Income",
+        ],
+    )
     performance_df = pd.DataFrame(performance_rows)
     position_df = pd.DataFrame(position_rows)
     cashflow_df = pd.DataFrame(cashflow_rows)
@@ -2098,21 +2129,7 @@ def compute_model_outputs(tables: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         "dcf_summary": discount_table,
     }
 
-    income_statement = summary_df.merge(
-        performance_df[
-            [
-                "Year",
-                "Marketing Spend",
-                "Fulfillment Cost",
-                "Staffing Cost",
-                "Benefits",
-                "Overheads",
-                "Property & Legal",
-            ]
-        ],
-        on="Year",
-        how="left",
-    ) if not summary_df.empty else pd.DataFrame()
+    income_statement = income_statement_df
 
     liquidity_rows: List[Dict[str, Any]] = []
     if not position_df.empty:
