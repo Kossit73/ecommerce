@@ -1413,31 +1413,78 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     return numerator / denominator
 
 
+def _draw_distribution_samples(
+    rng: np.random.Generator,
+    distribution: str,
+    params: Dict[str, float],
+    size: int,
+) -> np.ndarray:
+    dist = (distribution or "normal").lower()
+    if dist == "normal":
+        mean = params.get("mean", 1.0)
+        std = max(params.get("std", 0.1), 1e-6)
+        samples = rng.normal(mean, std, size)
+    elif dist == "triangular":
+        left = params.get("left", 0.8)
+        mode = params.get("mode", 1.0)
+        right = params.get("right", 1.2)
+        if right < left:
+            right = left
+        mode = min(max(mode, left), right)
+        samples = rng.triangular(left, mode, right, size)
+    elif dist == "uniform":
+        low = params.get("low", 0.9)
+        high = params.get("high", 1.1)
+        if high < low:
+            high = low
+        samples = rng.uniform(low, high, size)
+    else:
+        samples = np.ones(size)
+    return np.clip(samples, 0.0, None)
+
+
 def monte_carlo_analysis(
     base_cashflows: Sequence[float],
     iterations: int,
-    revenue_sigma: float,
-    cost_sigma: float,
+    revenue_distribution: str,
+    revenue_params: Dict[str, float],
+    cost_distribution: str,
+    cost_params: Dict[str, float],
     discount_rate: float,
 ) -> pd.DataFrame:
     if not base_cashflows or iterations <= 0:
         return pd.DataFrame()
+
+    rng = np.random.default_rng()
     base_array = np.array(list(base_cashflows), dtype=float)
+    positive_flows = base_array.clip(min=0)
+    negative_flows = base_array.clip(max=0)
+
+    revenue_factors = _draw_distribution_samples(
+        rng, revenue_distribution, revenue_params, iterations
+    )
+    cost_factors = _draw_distribution_samples(
+        rng, cost_distribution, cost_params, iterations
+    )
+
     results = []
-    for _ in range(iterations):
-        revenue_factor = np.random.normal(1.0, revenue_sigma)
-        cost_factor = np.random.normal(1.0, cost_sigma)
-        simulated = base_array * revenue_factor - (base_array.clip(min=0) * (cost_factor - 1))
+    for revenue_factor, cost_factor in zip(revenue_factors, cost_factors):
+        simulated = positive_flows * revenue_factor + negative_flows * cost_factor
         discount = 1 / ((1 + discount_rate) ** np.arange(1, len(simulated) + 1))
         npv = float(np.sum(simulated * discount))
         cumulative = simulated.cumsum()
+        irr = compute_irr_value(simulated.tolist())
         results.append(
             {
                 "NPV": npv,
-                "Ending Cash": float(cumulative[-1]),
-                "Min Cash": float(np.min(cumulative)),
+                "Ending Cash": float(cumulative[-1]) if len(cumulative) else 0.0,
+                "Min Cash": float(np.min(cumulative)) if len(cumulative) else 0.0,
+                "IRR": irr if irr is not None else float("nan"),
+                "Revenue Factor": revenue_factor,
+                "Cost Factor": cost_factor,
             }
         )
+
     return pd.DataFrame(results)
 
 
@@ -1460,6 +1507,33 @@ def simple_forecast(series: Sequence[float], periods: int) -> List[float]:
         last = last * (1 + growth)
         forecast.append(last)
     return forecast
+
+
+def run_linear_regression(
+    years: Sequence[float], values: Sequence[float]
+) -> Optional[Dict[str, Any]]:
+    cleaned = [
+        (float(year), float(value))
+        for year, value in zip(years, values)
+        if pd.notna(year) and pd.notna(value)
+    ]
+    if len(cleaned) < 2:
+        return None
+    x = np.array([item[0] for item in cleaned], dtype=float)
+    y = np.array([item[1] for item in cleaned], dtype=float)
+    slope, intercept = np.polyfit(x, y, 1)
+    predictions = slope * x + intercept
+    ss_res = float(np.sum((y - predictions) ** 2))
+    ss_tot = float(np.sum((y - np.mean(y)) ** 2))
+    r_squared = 1 - ss_res / ss_tot if ss_tot else 0.0
+    return {
+        "slope": slope,
+        "intercept": intercept,
+        "r_squared": r_squared,
+        "predictions": predictions,
+        "x": x,
+        "y": y,
+    }
 
 
 def goal_seek_margin(target_margin: float, base_revenue: float, base_margin: float) -> Tuple[float, float]:
@@ -3454,6 +3528,69 @@ def render_sensitivity_tab(tab: st.delta_generator.DeltaGenerator) -> None:
             st.dataframe(top_sensitivity.set_index("Scenario"), use_container_width=True)
 
 
+def _render_distribution_controls(prefix: str, label: str) -> Tuple[str, Dict[str, float]]:
+    distribution_options = ["Normal", "Triangular", "Uniform"]
+    dist = st.selectbox(
+        f"{label} distribution",
+        distribution_options,
+        key=f"{prefix}_distribution",
+    )
+    params: Dict[str, float]
+    if dist == "Normal":
+        normal_cols = st.columns(2)
+        mean = normal_cols[0].number_input(
+            f"{label} mean",
+            value=1.0,
+            step=0.05,
+            key=f"{prefix}_normal_mean",
+        )
+        std = normal_cols[1].number_input(
+            f"{label} std dev",
+            value=0.1,
+            min_value=0.0,
+            step=0.01,
+            key=f"{prefix}_normal_std",
+        )
+        params = {"mean": float(mean), "std": float(std)}
+    elif dist == "Triangular":
+        tri_cols = st.columns(3)
+        left = tri_cols[0].number_input(
+            f"{label} min",
+            value=0.8,
+            step=0.05,
+            key=f"{prefix}_tri_left",
+        )
+        mode = tri_cols[1].number_input(
+            f"{label} mode",
+            value=1.0,
+            step=0.05,
+            key=f"{prefix}_tri_mode",
+        )
+        right = tri_cols[2].number_input(
+            f"{label} max",
+            value=1.2,
+            step=0.05,
+            key=f"{prefix}_tri_right",
+        )
+        params = {"left": float(left), "mode": float(mode), "right": float(right)}
+    else:
+        uniform_cols = st.columns(2)
+        low = uniform_cols[0].number_input(
+            f"{label} min",
+            value=0.9,
+            step=0.05,
+            key=f"{prefix}_uniform_low",
+        )
+        high = uniform_cols[1].number_input(
+            f"{label} max",
+            value=1.1,
+            step=0.05,
+            key=f"{prefix}_uniform_high",
+        )
+        params = {"low": float(low), "high": float(high)}
+    return dist.lower(), params
+
+
 def render_advanced_tab(tab: st.delta_generator.DeltaGenerator) -> None:
     with tab:
         st.header("Advanced analysis")
@@ -3465,10 +3602,14 @@ def render_advanced_tab(tab: st.delta_generator.DeltaGenerator) -> None:
             return
 
         npv_value = results.get("npv", 0.0)
-        irr_value = results.get("irr")
         payback_year = results.get("payback_year")
         cashflow_df: pd.DataFrame = results.get("cashflow", pd.DataFrame())
         summary_df: pd.DataFrame = results.get("summary", pd.DataFrame())
+
+        cash_flows = cashflow_df["Net Cash Flow"].tolist() if not cashflow_df.empty else []
+        irr_value = compute_irr_value(cash_flows) if cash_flows else None
+        if irr_value is None:
+            irr_value = results.get("irr")
 
         valuation_cols = st.columns(3)
         valuation_cols[0].metric("Net Present Value", f"${npv_value:,.0f}")
@@ -3501,13 +3642,20 @@ def render_advanced_tab(tab: st.delta_generator.DeltaGenerator) -> None:
 
         st.subheader("Monte Carlo simulation")
         mc_iterations = st.slider("Iterations", 500, 5000, 2000, step=500)
-        revenue_sigma = st.slider("Revenue volatility", 0.0, 0.3, 0.1, step=0.01)
-        cost_sigma = st.slider("Cost volatility", 0.0, 0.3, 0.05, step=0.01)
         discount_rate = st.slider("Discount rate", 0.01, 0.3, DEFAULT_DISCOUNT_RATE, step=0.01)
-        cash_flows = cashflow_df["Net Cash Flow"].tolist() if not cashflow_df.empty else []
+        revenue_dist, revenue_params = _render_distribution_controls(
+            "mc_revenue", "Revenue factor"
+        )
+        cost_dist, cost_params = _render_distribution_controls("mc_cost", "Cost factor")
         if st.button("Run Monte Carlo", use_container_width=True):
             mc_df = monte_carlo_analysis(
-                cash_flows, mc_iterations, revenue_sigma, cost_sigma, discount_rate
+                cash_flows,
+                mc_iterations,
+                revenue_dist,
+                revenue_params,
+                cost_dist,
+                cost_params,
+                discount_rate,
             )
             if mc_df.empty:
                 st.warning("No cash flows available for simulation.")
@@ -3525,6 +3673,137 @@ def render_advanced_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                     ),
                     use_container_width=True,
                 )
+                valid_irr = mc_df["IRR"].replace([np.inf, -np.inf], np.nan).dropna()
+                if not valid_irr.empty:
+                    st.plotly_chart(
+                        go.Figure(
+                            data=[
+                                go.Histogram(
+                                    x=valid_irr * 100,
+                                    nbinsx=40,
+                                    marker_color="#f97316",
+                                )
+                            ],
+                            layout=go.Layout(title="IRR distribution", xaxis_title="IRR %"),
+                        ),
+                        use_container_width=True,
+                    )
+
+        st.subheader("Regression analysis")
+        if summary_df.empty:
+            st.info("Run the model to unlock regression diagnostics.")
+        else:
+            regression_metric = st.selectbox(
+                "Metric to regress",
+                ["Net Revenue", "Gross Profit", "EBITDA", "Net Income"],
+                key="regression_metric",
+            )
+            metric_frame = (
+                summary_df[["Year", regression_metric]]
+                .dropna()
+                .sort_values("Year")
+                .reset_index(drop=True)
+            )
+            regression_result = run_linear_regression(
+                metric_frame["Year"].tolist(), metric_frame[regression_metric].tolist()
+            )
+            if not regression_result:
+                st.warning("Not enough observations to fit a regression line.")
+            else:
+                slope = regression_result["slope"]
+                intercept = regression_result["intercept"]
+                r_squared = regression_result["r_squared"]
+                st.write(
+                    f"Trendline: {regression_metric} = {slope:,.2f} × Year + {intercept:,.2f}. "
+                    f"R² = {r_squared:,.3f}."
+                )
+                reg_fig = go.Figure()
+                reg_fig.add_trace(
+                    go.Scatter(
+                        x=metric_frame["Year"],
+                        y=metric_frame[regression_metric],
+                        mode="markers",
+                        name="Actual",
+                        marker=dict(color="#2563eb"),
+                    )
+                )
+                reg_fig.add_trace(
+                    go.Scatter(
+                        x=metric_frame["Year"],
+                        y=regression_result["predictions"],
+                        mode="lines",
+                        name="Trendline",
+                        line=dict(color="#f97316"),
+                    )
+                )
+                reg_fig.update_layout(
+                    title=f"Regression of {regression_metric} over time",
+                    yaxis=dict(tickprefix="$", separatethousands=True),
+                )
+                st.plotly_chart(reg_fig, use_container_width=True)
+
+        st.subheader("Time series projection")
+        if summary_df.empty:
+            st.info("Run the model to enable time series forecasts.")
+        else:
+            ts_metric = st.selectbox(
+                "Metric to forecast",
+                ["Net Revenue", "Gross Profit", "EBITDA", "Net Income"],
+                key="ts_metric",
+            )
+            horizon = st.slider("Forecast horizon (years)", 1, 5, 3, key="ts_horizon")
+            ts_frame = (
+                summary_df[["Year", ts_metric]]
+                .dropna()
+                .sort_values("Year")
+                .reset_index(drop=True)
+            )
+            if ts_frame.empty:
+                st.warning("No historical data for the selected metric.")
+            else:
+                forecast_values = simple_forecast(ts_frame[ts_metric].tolist(), horizon)
+                if not forecast_values:
+                    st.warning("Unable to compute a forecast from the supplied data.")
+                else:
+                    last_year = int(ts_frame["Year"].iloc[-1])
+                    future_years = [last_year + idx for idx in range(1, horizon + 1)]
+                    historical_df = ts_frame.copy()
+                    historical_df["Type"] = "Historical"
+                    forecast_df = pd.DataFrame(
+                        {
+                            "Year": future_years,
+                            ts_metric: forecast_values,
+                            "Type": "Forecast",
+                        }
+                    )
+                    combined = pd.concat([historical_df, forecast_df], ignore_index=True)
+                    st.dataframe(
+                        combined.set_index(["Type", "Year"]), use_container_width=True
+                    )
+                    ts_fig = go.Figure()
+                    ts_fig.add_trace(
+                        go.Scatter(
+                            x=historical_df["Year"],
+                            y=historical_df[ts_metric],
+                            mode="lines+markers",
+                            name="Historical",
+                            marker=dict(color="#2563eb"),
+                        )
+                    )
+                    ts_fig.add_trace(
+                        go.Scatter(
+                            x=future_years,
+                            y=forecast_values,
+                            mode="lines+markers",
+                            name="Forecast",
+                            line=dict(color="#16a34a", dash="dash"),
+                        )
+                    )
+                    ts_fig.update_layout(
+                        title=f"{ts_metric} historical and forecast",
+                        yaxis=dict(tickprefix="$", separatethousands=True),
+                    )
+                    st.plotly_chart(ts_fig, use_container_width=True)
 
         st.subheader("What-if overlays")
         if not summary_df.empty:
