@@ -1,9 +1,11 @@
 """Streamlit dashboard for manual ecommerce financial modeling."""
 from __future__ import annotations
+import io
 import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 import json
+import re
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -2787,15 +2789,120 @@ def configure_sidebar() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _sanitize_sheet_name(name: str, existing: Set[str]) -> str:
+    cleaned = re.sub(r"[\\/:?*\[\]]", "_", name)
+    cleaned = cleaned.strip() or "Sheet"
+    if len(cleaned) > 31:
+        cleaned = cleaned[:31]
+    base = cleaned
+    counter = 1
+    while cleaned in existing:
+        suffix = f"_{counter}"
+        cleaned = f"{base[: 31 - len(suffix)]}{suffix}" if len(base) + len(suffix) > 31 else f"{base}{suffix}"
+        counter += 1
+    existing.add(cleaned)
+    return cleaned
+
+
+def _gather_excel_frames(results: Dict[str, Any], assumption_tables: Dict[str, pd.DataFrame]) -> List[Tuple[str, pd.DataFrame]]:
+    frames: List[Tuple[str, pd.DataFrame]] = []
+
+    def add_frame(sheet_name: str, data: Any) -> None:
+        df = data if isinstance(data, pd.DataFrame) else to_dataframe(data)
+        if df is not None and not df.empty:
+            frames.append((sheet_name, df))
+
+    add_frame("Summary", results.get("summary"))
+    add_frame("Income Statement", results.get("income_statement"))
+    add_frame("Cash Flow", results.get("cashflow"))
+    add_frame("Balance Sheet", results.get("position"))
+    add_frame("Performance", results.get("performance"))
+    add_frame("Operational KPIs", results.get("operational_kpis"))
+    add_frame("Customer Metrics", results.get("customer_metrics"))
+    add_frame("Scenario Summary", results.get("scenario_summary"))
+    add_frame("Top Sensitivity", results.get("top_sensitivity"))
+    valuation_df = results.get("valuation_table")
+    add_frame("Valuation", valuation_df)
+    chart_payloads = results.get("chart_payloads", {}) if isinstance(results, dict) else {}
+    add_frame("DCF Summary", chart_payloads.get("dcf_summary"))
+    add_frame("Debt Amortization", results.get("debt_amortization"))
+    add_frame("Asset Schedule", results.get("asset_schedule"))
+    add_frame("Asset Rollforward", results.get("asset_rollforward"))
+
+    for schedule_name, table in sorted(assumption_tables.items()):
+        add_frame(f"Assumption - {schedule_name}", table)
+
+    if not frames:
+        return []
+
+    existing: Set[str] = set()
+    prepared: List[Tuple[str, pd.DataFrame]] = []
+    for sheet_name, frame in frames:
+        sanitized = _sanitize_sheet_name(sheet_name, existing)
+        prepared.append((sanitized, frame))
+    return prepared
+
+
+def _generate_excel_bytes(results: Dict[str, Any], assumption_tables: Dict[str, pd.DataFrame]) -> bytes:
+    frames = _gather_excel_frames(results, assumption_tables)
+    if not frames:
+        return b""
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+        for sheet_name, frame in frames:
+            frame.to_excel(writer, sheet_name=sheet_name, index=False)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def render_excel_download_section() -> None:
+    download_container = st.container()
+    results: Dict[str, Any] = st.session_state.get("model_results", {})
+    assumption_tables: Dict[str, pd.DataFrame] = st.session_state.get("assumption_tables", {})
+    selected_scenario = "Base Case"
+    scenario_key = re.sub(r"[^0-9a-z]+", "_", selected_scenario.lower()) or "default"
+
+    excel_map: Dict[str, bytes] = st.session_state.setdefault("excel_bytes_map", {})
+    excel_bytes = excel_map.get(selected_scenario)
+
+    with download_container:
+        st.subheader("Prepare Excel Model")
+        if not results:
+            st.info("Apply assumptions to generate results before preparing the Excel model.")
+            return
+        if not excel_bytes:
+            if st.button("Prepare Excel Model", key=f"prepare_excel_{scenario_key}"):
+                with st.spinner("Preparing Excel workbook..."):
+                    excel_bytes = _generate_excel_bytes(results, assumption_tables)
+                excel_map[selected_scenario] = excel_bytes
+                st.session_state.excel_bytes_map = excel_map
+        if excel_bytes:
+            st.download_button(
+                "Download Excel Model",
+                data=excel_bytes,
+                file_name="Ecommerce_Financial_Model.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            if st.button(
+                "Clear Prepared Excel",
+                key=f"clear_excel_{scenario_key}",
+            ):
+                excel_map.pop(selected_scenario, None)
+                st.session_state.excel_bytes_map = excel_map
+                excel_bytes = None
+        if not excel_bytes:
+            st.info("Click 'Prepare Excel Model' to generate the workbook for download.")
+
+
 def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
     with tab:
+        ensure_assumption_tables()
+        render_excel_download_section()
         st.header("Workbook setup & assumptions")
         st.write(
             "Upload or refresh the working Excel file, edit the grouped assumption tables,"
             " and control base analysis inputs before running downstream workflows."
         )
-
-        ensure_assumption_tables()
 
         st.subheader("Production horizon")
         st.caption(
