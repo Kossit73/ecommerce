@@ -19,6 +19,8 @@ try:  # numpy removed np.irr in v2.0; prefer numpy-financial when available
 except Exception:  # pragma: no cover - fallback when package is unavailable
     npf = None
 
+from environment_check import diagnose_environment
+
 # ---------------------------------------------------------------------------
 # Streamlit configuration & constants
 # ---------------------------------------------------------------------------
@@ -110,6 +112,37 @@ DEFAULT_PRODUCTION_START_YEAR = 2023
 DEFAULT_PRODUCTION_END_YEAR = 2027
 PRODUCTION_YEAR_CHOICES = list(range(2000, 2101))
 CONSISTENCY_TOLERANCE = 1e-2
+
+
+def render_environment_banner() -> bool:
+    """Display dependency readiness and return ``True`` when safe to continue."""
+
+    status = diagnose_environment()
+    missing_required: List[str] = status.get("missing_required", [])  # type: ignore[arg-type]
+    missing_optional: List[str] = status.get("missing_optional", [])  # type: ignore[arg-type]
+    st.session_state["missing_optional_dependencies"] = missing_optional
+
+    if missing_required:
+        missing_list = ", ".join(missing_required)
+        st.error(
+            "The analytics engine is unavailable because the following Python packages "
+            f"are missing: {missing_list}."
+        )
+        st.info(
+            "Install the backend dependencies with `pip install -r backend-requirements.txt` "
+            "and restart the app."
+        )
+        return False
+
+    if missing_optional:
+        st.warning(
+            "Optional features may be limited because these packages are unavailable: "
+            + ", ".join(missing_optional)
+        )
+    else:
+        st.success("All analytical dependencies are available.")
+
+    return True
 
 
 def default_production_years() -> List[int]:
@@ -4311,6 +4344,8 @@ def main() -> None:
     st.caption(
         "Interactive workbook builder for ecommerce financial planning and scenario analysis."
     )
+    if not render_environment_banner():
+        return
     (
         input_tab,
         metrics_tab,
