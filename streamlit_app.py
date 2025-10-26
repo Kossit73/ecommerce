@@ -1,5 +1,6 @@
 """Streamlit dashboard for manual ecommerce financial modeling."""
 from __future__ import annotations
+import importlib
 import io
 import os
 from pathlib import Path
@@ -2872,12 +2873,44 @@ def _gather_excel_frames(results: Dict[str, Any], assumption_tables: Dict[str, p
     return prepared
 
 
+_EXCEL_ENGINE: Optional[str] = None
+
+
+def _resolve_excel_engine() -> str:
+    global _EXCEL_ENGINE
+    if _EXCEL_ENGINE:
+        return _EXCEL_ENGINE
+
+    engine_candidates: List[Tuple[str, str]] = [
+        ("xlsxwriter", "xlsxwriter"),
+        ("openpyxl", "openpyxl"),
+    ]
+
+    for engine_name, module_name in engine_candidates:
+        try:
+            importlib.import_module(module_name)
+        except ImportError:
+            continue
+        _EXCEL_ENGINE = engine_name
+        return engine_name
+
+    raise RuntimeError(
+        "No supported Excel writer engine found. Install either 'xlsxwriter' or 'openpyxl'."
+    )
+
+
 def _generate_excel_bytes(results: Dict[str, Any], assumption_tables: Dict[str, pd.DataFrame]) -> bytes:
     frames = _gather_excel_frames(results, assumption_tables)
     if not frames:
         return b""
     buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+    try:
+        engine_name = _resolve_excel_engine()
+    except RuntimeError as error:
+        st.error(str(error))
+        return b""
+
+    with pd.ExcelWriter(buffer, engine=engine_name) as writer:
         for sheet_name, frame in frames:
             frame.to_excel(writer, sheet_name=sheet_name, index=False)
     buffer.seek(0)
