@@ -9,19 +9,17 @@ from typing import Dict, List
 
 LOGGER = logging.getLogger(__name__)
 
-# These packages power the heavy modelling routines and must be available.
+# Core dependencies that power the modelling pipeline.
 REQUIRED_MODULES: Dict[str, str] = {
-    "scipy": "SciPy core package",
-    "scipy.stats": "SciPy statistical distributions",
-    "scipy.optimize": "SciPy optimisation routines",
-    "statsmodels": "statsmodels time-series toolkit",
-    "sklearn": "scikit-learn machine learning toolkit",
-    "networkx": "NetworkX graph analytics",
+    "numpy": "NumPy numerical computing library",
+    "pandas": "Pandas data toolkit",
+    "matplotlib": "Matplotlib visualisation toolkit",
+    "plotly": "Plotly charting library",
+    "numpy_financial": "NumPy Financial helpers",
 }
 
 # Helpful but non-blocking extras – the app can limp along without them.
 OPTIONAL_MODULES: Dict[str, str] = {
-    "numpy_financial": "NumPy Financial helpers (falls back to NumPy if missing)",
     "xlsxwriter": "XlsxWriter Excel writer",
     "openpyxl": "openpyxl Excel writer",
 }
