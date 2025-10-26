@@ -2869,14 +2869,19 @@ def render_excel_download_section() -> None:
         st.subheader("Prepare Excel Model")
         if not results:
             st.info("Apply assumptions to generate results before preparing the Excel model.")
-            return
-        if not excel_bytes:
-            if st.button("Prepare Excel Model", key=f"prepare_excel_{scenario_key}"):
+
+        if excel_bytes is None:
+            if st.button(
+                "Prepare Excel Model",
+                key=f"prepare_excel_{scenario_key}",
+                disabled=not results,
+            ):
                 with st.spinner("Preparing Excel workbook..."):
                     excel_bytes = _generate_excel_bytes(results, assumption_tables)
                 excel_map[selected_scenario] = excel_bytes
                 st.session_state.excel_bytes_map = excel_map
-        if excel_bytes:
+
+        if excel_bytes is not None:
             st.download_button(
                 "Download Excel Model",
                 data=excel_bytes,
@@ -2890,7 +2895,8 @@ def render_excel_download_section() -> None:
                 excel_map.pop(selected_scenario, None)
                 st.session_state.excel_bytes_map = excel_map
                 excel_bytes = None
-        if not excel_bytes:
+
+        if excel_bytes is None:
             st.info("Click 'Prepare Excel Model' to generate the workbook for download.")
 
 
