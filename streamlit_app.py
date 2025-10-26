@@ -126,11 +126,8 @@ def render_environment_banner() -> bool:
         missing_list = ", ".join(missing_required)
         st.error(
             "The analytics engine is unavailable because the following Python packages "
-            f"are missing: {missing_list}."
-        )
-        st.info(
-            "Install the backend dependencies with `pip install -r backend-requirements.txt` "
-            "and restart the app."
+            f"are missing: {missing_list}. Install the backend dependencies with `pip install -r "
+            "backend-requirements.txt` and restart the app."
         )
         return False
 
