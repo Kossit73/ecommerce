@@ -13,13 +13,13 @@ LOGGER = logging.getLogger(__name__)
 REQUIRED_MODULES: Dict[str, str] = {
     "numpy": "NumPy numerical computing library",
     "pandas": "Pandas data toolkit",
-    "matplotlib": "Matplotlib visualisation toolkit",
     "plotly": "Plotly charting library",
-    "numpy_financial": "NumPy Financial helpers",
 }
 
 # Helpful but non-blocking extras – the app can limp along without them.
 OPTIONAL_MODULES: Dict[str, str] = {
+    "matplotlib": "Matplotlib visualisation toolkit",
+    "numpy_financial": "NumPy Financial helpers",
     "xlsxwriter": "XlsxWriter Excel writer",
     "openpyxl": "openpyxl Excel writer",
 }

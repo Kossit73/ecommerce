@@ -1,9 +1,7 @@
 import pandas as pd
 import numpy as np
-import numpy_financial as npf
 from pathlib import Path
 import plotly.graph_objects as go
-import matplotlib.pyplot as plt
 from io import BytesIO
 import base64
 import logging
@@ -18,6 +16,15 @@ import signal
 import threading
 import plotly.io as pio
 from xlsxwriter.exceptions import DuplicateWorksheetName
+
+from financial_math import irr as financial_irr
+from financial_math import npv as financial_npv
+from financial_math import pmt as financial_pmt
+
+try:  # Matplotlib is optional; decision-tree rendering degrades gracefully.
+    import matplotlib.pyplot as plt
+except Exception:  # pragma: no cover - optional dependency guard
+    plt = None
 
 
 class SimpleLinearRegressor:
@@ -564,7 +571,7 @@ class EcommerceModel:
 
                 # Calculate annual payment using the annuity formula (PMT)
                 if rate > 0 and duration > 0 and amount > 0:
-                    annual_payment = npf.pmt(rate, duration, -amount, 0)  # Negative amount for loan
+                    annual_payment = financial_pmt(rate, duration, -amount, 0)
                 else:
                     annual_payment = amount / duration if duration > 0 else amount
 
@@ -1178,7 +1185,7 @@ class EcommerceModel:
                 return np.nan
 
             # Calculate IRR
-            irr = npf.irr(cash_flows)
+            irr = financial_irr(cash_flows)
 
             # Validate IRR (sometimes IRR can be unrealistic due to numerical issues)
             if not np.isfinite(irr) or irr < -1 or irr > 10:  # Arbitrary bounds; adjust as needed
@@ -1396,12 +1403,12 @@ class EcommerceModel:
             cash_flows = [initial_investment] + cash_flow_series.tolist()
 
             # Compute NPV for the scenario as a whole
-            npv_value = npf.npv(discount_rate, cash_flows)
+            npv_value = financial_npv(discount_rate, cash_flows)
             result_df['NPV'] = round(npv_value, 2)
 
             # Compute IRR for the scenario as a whole
             try:
-                irr = npf.irr(cash_flows)
+                irr = financial_irr(cash_flows)
                 result_df['IRR'] = round(irr * 100 if irr is not None else 0, 2)
             except:
                 result_df['IRR'] = 0.0
@@ -1943,72 +1950,79 @@ class EcommerceModel:
                 "Increase Paid Budget": clean_float(paid_expected - paid_cost),
             }
 
-            fig, ax = plt.subplots(figsize=(10, 6))
-            ax.axis('off')
+            img_str: Optional[str] = None
+            if plt is not None:
+                fig, ax = plt.subplots(figsize=(10, 6))
+                ax.axis('off')
 
-            node_positions = {
-                "D1": (0.15, 0.5),
-                "C1": (0.5, 0.75),
-                "C2": (0.5, 0.25),
-                "T1": (0.85, 0.9),
-                "T2": (0.85, 0.6),
-                "T3": (0.85, 0.4),
-                "T4": (0.85, 0.1),
-            }
+                node_positions = {
+                    "D1": (0.15, 0.5),
+                    "C1": (0.5, 0.75),
+                    "C2": (0.5, 0.25),
+                    "T1": (0.85, 0.9),
+                    "T2": (0.85, 0.6),
+                    "T3": (0.85, 0.4),
+                    "T4": (0.85, 0.1),
+                }
 
-            def draw_node(node_id: str, label: str, value: Optional[float] = None) -> None:
-                text = label
-                if value is not None:
-                    text += f"\n${value:,.0f}"
-                ax.text(
-                    *node_positions[node_id],
-                    text,
-                    ha='center',
-                    va='center',
-                    fontsize=10,
-                    bbox=dict(boxstyle='round,pad=0.4', facecolor='#e6f0ff', edgecolor='#3a5ba0'),
-                )
+                def draw_node(node_id: str, label: str, value: Optional[float] = None) -> None:
+                    text = label
+                    if value is not None:
+                        text += f"\n${value:,.0f}"
+                    ax.text(
+                        *node_positions[node_id],
+                        text,
+                        ha='center',
+                        va='center',
+                        fontsize=10,
+                        bbox=dict(boxstyle='round,pad=0.4', facecolor='#e6f0ff', edgecolor='#3a5ba0'),
+                    )
 
-            draw_node("D1", "Marketing Budget")
-            draw_node("C1", "Email Outcome")
-            draw_node("C2", "Paid Outcome")
-            draw_node("T1", "High Email Success", email_high_value)
-            draw_node("T2", "Low Email Success", email_low_value)
-            draw_node("T3", "High Paid Success", paid_high_value)
-            draw_node("T4", "Low Paid Success", paid_low_value)
+                draw_node("D1", "Marketing Budget")
+                draw_node("C1", "Email Outcome")
+                draw_node("C2", "Paid Outcome")
+                draw_node("T1", "High Email Success", email_high_value)
+                draw_node("T2", "Low Email Success", email_low_value)
+                draw_node("T3", "High Paid Success", paid_high_value)
+                draw_node("T4", "Low Paid Success", paid_low_value)
 
-            def draw_edge(start: str, end: str, label: str) -> None:
-                start_pos = node_positions[start]
-                end_pos = node_positions[end]
-                ax.annotate(
-                    "",
-                    xy=end_pos,
-                    xytext=start_pos,
-                    arrowprops=dict(arrowstyle="->", color="#53627c", lw=1.5),
-                )
-                mid_x = (start_pos[0] + end_pos[0]) / 2
-                mid_y = (start_pos[1] + end_pos[1]) / 2
-                ax.text(mid_x, mid_y, label, fontsize=9, ha='center', va='center', color='#2a3b5f')
+                def draw_edge(start: str, end: str, label: str) -> None:
+                    start_pos = node_positions[start]
+                    end_pos = node_positions[end]
+                    ax.annotate(
+                        "",
+                        xy=end_pos,
+                        xytext=start_pos,
+                        arrowprops=dict(arrowstyle="->", color="#53627c", lw=1.5),
+                    )
+                    mid_x = (start_pos[0] + end_pos[0]) / 2
+                    mid_y = (start_pos[1] + end_pos[1]) / 2
+                    ax.text(mid_x, mid_y, label, fontsize=9, ha='center', va='center', color='#2a3b5f')
 
-            draw_edge("D1", "C1", f"Email Budget\nProb: {email_decision_prob:.2f}")
-            draw_edge("D1", "C2", f"Paid Budget\nProb: {paid_decision_prob:.2f}")
-            draw_edge("C1", "T1", f"High\nProb: {email_high_prob:.2f}")
-            draw_edge("C1", "T2", f"Low\nProb: {1 - email_high_prob:.2f}")
-            draw_edge("C2", "T3", f"High\nProb: {paid_high_prob:.2f}")
-            draw_edge("C2", "T4", f"Low\nProb: {1 - paid_high_prob:.2f}")
+                draw_edge("D1", "C1", f"Email Budget\nProb: {email_decision_prob:.2f}")
+                draw_edge("D1", "C2", f"Paid Budget\nProb: {paid_decision_prob:.2f}")
+                draw_edge("C1", "T1", f"High\nProb: {email_high_prob:.2f}")
+                draw_edge("C1", "T2", f"Low\nProb: {1 - email_high_prob:.2f}")
+                draw_edge("C2", "T3", f"High\nProb: {paid_high_prob:.2f}")
+                draw_edge("C2", "T4", f"Low\nProb: {1 - paid_high_prob:.2f}")
 
-            ax.set_title("Decision Tree (PrecisionTree Simulation)")
-            buf = BytesIO()
-            fig.savefig(buf, format="png", bbox_inches='tight')
-            buf.seek(0)
-            img_str = base64.b64encode(buf.read()).decode()
-            plt.close(fig)
+                ax.set_title("Decision Tree (PrecisionTree Simulation)")
+                buf = BytesIO()
+                fig.savefig(buf, format="png", bbox_inches='tight')
+                buf.seek(0)
+                img_str = base64.b64encode(buf.read()).decode()
+                plt.close(fig)
+            else:
+                logger.warning("Matplotlib is not available; returning PrecisionTree results without a visualisation.")
 
             # Prepare response
             response = {
                 "decision_outcomes": decision_outcomes,
-                "decision_tree_image": f"data:image/png;base64,{img_str}",
-                "message": "PrecisionTree analysis completed successfully"
+                "decision_tree_image": f"data:image/png;base64,{img_str}" if img_str else None,
+                "message": (
+                    "PrecisionTree analysis completed successfully" +
+                    (" (visualisation unavailable)" if img_str is None else "")
+                )
             }
 
             logger.info("PrecisionTree analysis completed successfully")
