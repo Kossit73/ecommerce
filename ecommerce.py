@@ -1,39 +1,14 @@
 import pandas as pd
 import numpy as np
-import numpy_financial as npf
 from pathlib import Path
-from scipy import stats
-from scipy.stats import (
-    bernoulli,
-    beta,
-    binom,
-    chi2,
-    expon,
-    f,
-    gamma,
-    geom,
-    hypergeom,
-    lognorm,
-    multinomial,
-    norm,
-    poisson,
-    uniform,
-    weibull_min,
-)
-from scipy.optimize import minimize
-from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import StandardScaler
-from sklearn.neural_network import MLPRegressor
-from statsmodels.tsa.arima.model import ARIMA
-import networkx as nx
 import plotly.graph_objects as go
-import matplotlib.pyplot as plt
 from io import BytesIO
 import base64
 import logging
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import os
 import math
+from statistics import NormalDist
 from fastapi import HTTPException
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from functools import wraps
@@ -41,6 +16,125 @@ import signal
 import threading
 import plotly.io as pio
 from xlsxwriter.exceptions import DuplicateWorksheetName
+
+from financial_math import irr as financial_irr
+from financial_math import npv as financial_npv
+from financial_math import pmt as financial_pmt
+
+try:  # Matplotlib is optional; decision-tree rendering degrades gracefully.
+    import matplotlib.pyplot as plt
+except Exception:  # pragma: no cover - optional dependency guard
+    plt = None
+
+
+class SimpleLinearRegressor:
+    """Lightweight linear regression using NumPy least squares."""
+
+    def __init__(self) -> None:
+        self.coef_: np.ndarray | None = None
+        self.intercept_: float = 0.0
+
+    def fit(self, X: np.ndarray, y: np.ndarray) -> "SimpleLinearRegressor":
+        X_arr = np.asarray(X, dtype=float)
+        if X_arr.ndim == 1:
+            X_arr = X_arr[:, None]
+        y_arr = np.asarray(y, dtype=float)
+        if y_arr.ndim > 1 and y_arr.shape[1] == 1:
+            y_arr = y_arr[:, 0]
+        ones = np.ones((X_arr.shape[0], 1))
+        augmented = np.hstack([X_arr, ones])
+        coeffs, *_ = np.linalg.lstsq(augmented, y_arr, rcond=None)
+        self.coef_ = coeffs[:-1]
+        self.intercept_ = float(coeffs[-1])
+        return self
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        if self.coef_ is None:
+            raise RuntimeError("Model has not been fit yet")
+        X_arr = np.asarray(X, dtype=float)
+        if X_arr.ndim == 1:
+            X_arr = X_arr[:, None]
+        return X_arr @ self.coef_ + self.intercept_
+
+
+class SimpleStandardScaler:
+    """Minimal feature scaler that mirrors scikit-learn behaviour."""
+
+    def __init__(self) -> None:
+        self.mean_: np.ndarray | None = None
+        self.scale_: np.ndarray | None = None
+
+    def fit(self, X: np.ndarray) -> "SimpleStandardScaler":
+        X_arr = np.asarray(X, dtype=float)
+        self.mean_ = X_arr.mean(axis=0)
+        scale = X_arr.std(axis=0)
+        scale[scale == 0] = 1.0
+        self.scale_ = scale
+        return self
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        if self.mean_ is None or self.scale_ is None:
+            raise RuntimeError("Scaler has not been fit yet")
+        X_arr = np.asarray(X, dtype=float)
+        return (X_arr - self.mean_) / self.scale_
+
+    def fit_transform(self, X: np.ndarray) -> np.ndarray:
+        return self.fit(X).transform(X)
+
+
+def _simple_random_search(
+    objective_fn,
+    constraint_fn,
+    initial: np.ndarray,
+    lower: np.ndarray,
+    upper: np.ndarray,
+    iterations: int = 800,
+    seed: int = 42,
+) -> np.ndarray:
+    """Heuristic optimiser that perturbs values while honouring constraints."""
+
+    rng = np.random.default_rng(seed)
+    best = np.clip(initial.astype(float), lower, upper)
+    best_score = objective_fn(best)
+    if constraint_fn(best) < 0:
+        # Project initial guess back into the feasible region by scaling down values.
+        scale = 0.95
+        while constraint_fn(best) < 0 and scale > 0:
+            best = np.clip(initial * scale, lower, upper)
+            scale -= 0.05
+        best_score = objective_fn(best)
+
+    for step in np.linspace(1.0, 0.05, iterations):
+        perturb = rng.normal(scale=step, size=best.shape[0])
+        candidate = np.clip(best + perturb, lower, upper)
+        if constraint_fn(candidate) < 0:
+            continue
+        score = objective_fn(candidate)
+        if score < best_score:
+            best = candidate
+            best_score = score
+    return best
+
+
+def _simple_forecast(series: np.ndarray, steps: int) -> tuple[np.ndarray, float]:
+    """Provide a basic ARIMA-style forecast using drift and residual variance."""
+
+    series = np.asarray(series, dtype=float)
+    if series.size == 0:
+        return np.zeros(steps), 0.0
+    if series.size == 1:
+        return np.full(steps, series[0]), 0.0
+
+    diffs = np.diff(series)
+    drift = float(diffs.mean()) if diffs.size else 0.0
+    residuals = diffs - drift
+    residual_std = float(residuals.std()) if residuals.size else 0.0
+    forecast = []
+    last = series[-1]
+    for _ in range(steps):
+        last = last + drift
+        forecast.append(last)
+    return np.asarray(forecast, dtype=float), residual_std
 
 
 def _resolve_default_workbook() -> Path:
@@ -477,7 +571,7 @@ class EcommerceModel:
 
                 # Calculate annual payment using the annuity formula (PMT)
                 if rate > 0 and duration > 0 and amount > 0:
-                    annual_payment = npf.pmt(rate, duration, -amount, 0)  # Negative amount for loan
+                    annual_payment = financial_pmt(rate, duration, -amount, 0)
                 else:
                     annual_payment = amount / duration if duration > 0 else amount
 
@@ -1091,7 +1185,7 @@ class EcommerceModel:
                 return np.nan
 
             # Calculate IRR
-            irr = npf.irr(cash_flows)
+            irr = financial_irr(cash_flows)
 
             # Validate IRR (sometimes IRR can be unrealistic due to numerical issues)
             if not np.isfinite(irr) or irr < -1 or irr > 10:  # Arbitrary bounds; adjust as needed
@@ -1309,12 +1403,12 @@ class EcommerceModel:
             cash_flows = [initial_investment] + cash_flow_series.tolist()
 
             # Compute NPV for the scenario as a whole
-            npv_value = npf.npv(discount_rate, cash_flows)
+            npv_value = financial_npv(discount_rate, cash_flows)
             result_df['NPV'] = round(npv_value, 2)
 
             # Compute IRR for the scenario as a whole
             try:
-                irr = npf.irr(cash_flows)
+                irr = financial_irr(cash_flows)
                 result_df['IRR'] = round(irr * 100 if irr is not None else 0, 2)
             except:
                 result_df['IRR'] = 0.0
@@ -1521,7 +1615,7 @@ class EcommerceModel:
                 return [last_val * (1 + growth) ** i for i in range(n_years)]
             else:
                 X = np.array(range(len(values))).reshape(-1, 1)
-                model = LinearRegression().fit(X, values.values.reshape(-1, 1))
+                model = SimpleLinearRegressor().fit(X, values.values.reshape(-1, 1))
                 future_X = np.array(range(len(values), len(values) + n_years)).reshape(-1, 1)
                 forecast = model.predict(future_X).flatten()
                 return np.where(np.isnan(forecast), values.iloc[-1], forecast)
@@ -1821,16 +1915,6 @@ class EcommerceModel:
             email_high_prob = min(max(email_high_prob, email_prob_bound_lower), email_prob_bound_upper)
             paid_high_prob = min(max(paid_high_prob, paid_prob_bound_lower), paid_prob_bound_upper)
 
-            # Define decision tree
-            G = nx.DiGraph()
-            G.add_node("D1", label="Marketing Budget", type="decision")
-            G.add_node("C1", label="Email Traffic Outcome", type="chance")
-            G.add_node("C2", label="Paid Traffic Outcome", type="chance")
-            G.add_node("T1", label="High Email Success", type="terminal", value=0)
-            G.add_node("T2", label="Low Email Success", type="terminal", value=0)
-            G.add_node("T3", label="High Paid Success", type="terminal", value=0)
-            G.add_node("T4", label="Low Paid Success", type="terminal", value=0)
-
             # Dynamic costs based on historical marketing expenses
             email_cost = clean_float(df['Email Cost per Click'].mean() * df['Email Traffic'].mean() * 12)
             paid_cost = clean_float(df['Paid Search Cost per Click'].mean() * df['Paid Search Traffic'].mean() * 12)
@@ -1839,13 +1923,6 @@ class EcommerceModel:
             total_cost = email_cost + paid_cost
             email_decision_prob = email_cost / total_cost if total_cost != 0 else 0.5
             paid_decision_prob = paid_cost / total_cost if total_cost != 0 else 0.5
-
-            G.add_edge("D1", "C1", label="Increase Email Budget", cost=-email_cost, probability=email_decision_prob)
-            G.add_edge("D1", "C2", label="Increase Paid Budget", cost=-paid_cost, probability=paid_decision_prob)
-            G.add_edge("C1", "T1", label="High", probability=email_high_prob)
-            G.add_edge("C1", "T2", label="Low", probability=1 - email_high_prob)
-            G.add_edge("C2", "T3", label="High", probability=paid_high_prob)
-            G.add_edge("C2", "T4", label="Low", probability=1 - paid_high_prob)
 
             # Calculate terminal values based on historical data
             avg_email_traffic = clean_float(df['Email Traffic'].mean())
@@ -1860,49 +1937,92 @@ class EcommerceModel:
             paid_high_traffic = avg_paid_traffic * (1 + paid_growth + paid_growth_vol) if paid_growth_vol != 0 else avg_paid_traffic * (1 + paid_growth * 2)
             paid_low_traffic = avg_paid_traffic * (1 + paid_growth - paid_growth_vol) if paid_growth_vol != 0 else avg_paid_traffic * (1 + paid_growth * 0.5)
 
-            G.nodes["T1"]['value'] = clean_float(email_high_traffic * avg_email_conv * avg_order_value * 12)
-            G.nodes["T2"]['value'] = clean_float(email_low_traffic * avg_email_conv * avg_order_value * 12)
-            G.nodes["T3"]['value'] = clean_float(paid_high_traffic * avg_paid_conv * avg_order_value * 12)
-            G.nodes["T4"]['value'] = clean_float(paid_low_traffic * avg_paid_conv * avg_order_value * 12)
+            email_high_value = clean_float(email_high_traffic * avg_email_conv * avg_order_value * 12)
+            email_low_value = clean_float(email_low_traffic * avg_email_conv * avg_order_value * 12)
+            paid_high_value = clean_float(paid_high_traffic * avg_paid_conv * avg_order_value * 12)
+            paid_low_value = clean_float(paid_low_traffic * avg_paid_conv * avg_order_value * 12)
 
-            # Calculate expected values
-            expected_values = {}
-            for chance_node in [n for n, d in G.nodes(data=True) if d['type'] == 'chance']:
-                successors = list(G.successors(chance_node))
-                ev = sum(G.edges[chance_node, succ]['probability'] * G.nodes[succ]['value'] for succ in successors)
-                expected_values[chance_node] = clean_float(ev)
+            email_expected = clean_float(email_high_prob * email_high_value + (1 - email_high_prob) * email_low_value)
+            paid_expected = clean_float(paid_high_prob * paid_high_value + (1 - paid_high_prob) * paid_low_value)
 
-            # Decision node evaluation
-            decision_outcomes = {}
-            for decision in [n for n, d in G.nodes(data=True) if d['type'] == 'decision']:
-                for succ in G.successors(decision):
-                    cost = G.edges[decision, succ]['cost']
-                    ev = expected_values[succ] + cost
-                    decision_outcomes[G.edges[decision, succ]['label']] = clean_float(ev)
+            decision_outcomes = {
+                "Increase Email Budget": clean_float(email_expected - email_cost),
+                "Increase Paid Budget": clean_float(paid_expected - paid_cost),
+            }
 
-            
-            outcomes_df = pd.DataFrame.from_dict(decision_outcomes, orient='index', columns=['Expected Value ($)'])
-      
+            img_str: Optional[str] = None
+            if plt is not None:
+                fig, ax = plt.subplots(figsize=(10, 6))
+                ax.axis('off')
 
-            # Visualize Decision Tree
-            plt.figure(figsize=(10, 6))
-            pos = nx.spring_layout(G)
-            node_labels = {node: G.nodes[node]['label'] for node in G.nodes}
-            nx.draw(G, pos, with_labels=True, labels=node_labels, node_color='lightblue', node_size=2000, font_size=10)
-            edge_labels = {(u, v): f"{d.get('label', '')}\nProb: {d.get('probability', ''):.2f}" for u, v, d in G.edges(data=True)}
-            nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels)
-            plt.title("Decision Tree (PrecisionTree Simulation)")
-            buf = BytesIO()
-            plt.savefig(buf, format="png")
-            buf.seek(0)
-            img_str = base64.b64encode(buf.read()).decode()
-            plt.close()
+                node_positions = {
+                    "D1": (0.15, 0.5),
+                    "C1": (0.5, 0.75),
+                    "C2": (0.5, 0.25),
+                    "T1": (0.85, 0.9),
+                    "T2": (0.85, 0.6),
+                    "T3": (0.85, 0.4),
+                    "T4": (0.85, 0.1),
+                }
+
+                def draw_node(node_id: str, label: str, value: Optional[float] = None) -> None:
+                    text = label
+                    if value is not None:
+                        text += f"\n${value:,.0f}"
+                    ax.text(
+                        *node_positions[node_id],
+                        text,
+                        ha='center',
+                        va='center',
+                        fontsize=10,
+                        bbox=dict(boxstyle='round,pad=0.4', facecolor='#e6f0ff', edgecolor='#3a5ba0'),
+                    )
+
+                draw_node("D1", "Marketing Budget")
+                draw_node("C1", "Email Outcome")
+                draw_node("C2", "Paid Outcome")
+                draw_node("T1", "High Email Success", email_high_value)
+                draw_node("T2", "Low Email Success", email_low_value)
+                draw_node("T3", "High Paid Success", paid_high_value)
+                draw_node("T4", "Low Paid Success", paid_low_value)
+
+                def draw_edge(start: str, end: str, label: str) -> None:
+                    start_pos = node_positions[start]
+                    end_pos = node_positions[end]
+                    ax.annotate(
+                        "",
+                        xy=end_pos,
+                        xytext=start_pos,
+                        arrowprops=dict(arrowstyle="->", color="#53627c", lw=1.5),
+                    )
+                    mid_x = (start_pos[0] + end_pos[0]) / 2
+                    mid_y = (start_pos[1] + end_pos[1]) / 2
+                    ax.text(mid_x, mid_y, label, fontsize=9, ha='center', va='center', color='#2a3b5f')
+
+                draw_edge("D1", "C1", f"Email Budget\nProb: {email_decision_prob:.2f}")
+                draw_edge("D1", "C2", f"Paid Budget\nProb: {paid_decision_prob:.2f}")
+                draw_edge("C1", "T1", f"High\nProb: {email_high_prob:.2f}")
+                draw_edge("C1", "T2", f"Low\nProb: {1 - email_high_prob:.2f}")
+                draw_edge("C2", "T3", f"High\nProb: {paid_high_prob:.2f}")
+                draw_edge("C2", "T4", f"Low\nProb: {1 - paid_high_prob:.2f}")
+
+                ax.set_title("Decision Tree (PrecisionTree Simulation)")
+                buf = BytesIO()
+                fig.savefig(buf, format="png", bbox_inches='tight')
+                buf.seek(0)
+                img_str = base64.b64encode(buf.read()).decode()
+                plt.close(fig)
+            else:
+                logger.warning("Matplotlib is not available; returning PrecisionTree results without a visualisation.")
 
             # Prepare response
             response = {
                 "decision_outcomes": decision_outcomes,
-                "decision_tree_image": f"data:image/png;base64,{img_str}",
-                "message": "PrecisionTree analysis completed successfully"
+                "decision_tree_image": f"data:image/png;base64,{img_str}" if img_str else None,
+                "message": (
+                    "PrecisionTree analysis completed successfully" +
+                    (" (visualisation unavailable)" if img_str is None else "")
+                )
             }
 
             logger.info("PrecisionTree analysis completed successfully")
@@ -2121,16 +2241,15 @@ class EcommerceModel:
                 historical_values = historical_data[metric].values
                 
                 try:
-                    model = ARIMA(historical_values, order=(1, 1, 1))
-                    model_fit = model.fit()
-                    forecast_result = model_fit.get_forecast(steps=forecast_years)
-                    forecast_mean = forecast_result.predicted_mean
-                    conf_int = forecast_result.conf_int(alpha=alpha)
-                    
+                    forecast_mean, resid_std = _simple_forecast(historical_values, forecast_years)
+                    z_value = NormalDist().inv_cdf(1 - alpha / 2)
+                    lower_forecast = forecast_mean - z_value * resid_std
+                    upper_forecast = forecast_mean + z_value * resid_std
+
                     full_series = np.concatenate([historical_values, forecast_mean])
-                    lower_ci = np.concatenate([historical_values, conf_int[:, 0]])
-                    upper_ci = np.concatenate([historical_values, conf_int[:, 1]])
-                    
+                    lower_ci = np.concatenate([historical_values, lower_forecast])
+                    upper_ci = np.concatenate([historical_values, upper_forecast])
+
                     forecast_results[metric] = {
                         'full_series': full_series.tolist(),
                         'historical': historical_values.tolist(),
@@ -2266,21 +2385,22 @@ class EcommerceModel:
         y = df[target].values
         
         # Scale features
-        scaler = StandardScaler()
+        scaler = SimpleStandardScaler()
         X_scaled = scaler.fit_transform(X)
-        
-        # Train neural network
-        nn = MLPRegressor(hidden_layer_sizes=(10, 10), max_iter=1000, random_state=42)
-        nn.fit(X_scaled, y)
-        
+
+        # Train lightweight regression model
+        model = SimpleLinearRegressor().fit(X_scaled, y)
+
         # Predict future revenue with dynamic traffic increase
         future_X = X[-1:] * (1 + traffic_increase_percentage / 100)
         future_X_scaled = scaler.transform(future_X)
-        predicted_revenue = nn.predict(future_X_scaled)[0]
-        
-        # Feature importance
-        importance = np.abs(nn.coefs_[0]).sum(axis=1)
-        importance_normalized = importance / importance.sum()
+        predicted_revenue = float(model.predict(future_X_scaled)[0])
+
+        coef_magnitude = np.abs(model.coef_)
+        if coef_magnitude.sum() == 0:
+            importance_normalized = np.full_like(coef_magnitude, 1 / len(coef_magnitude))
+        else:
+            importance_normalized = coef_magnitude / coef_magnitude.sum()
         
         # Prepare response
         response = {
@@ -2412,46 +2532,47 @@ class EcommerceModel:
         if total_cost > budget_amount * forecast_years:
             raise HTTPException(status_code=400, detail=f"Initial cost {total_cost} exceeds budget {budget_amount * forecast_years}")
 
-        constraints = [{'type': 'ineq', 'fun': budget_constraint}]
-        result = minimize(
+        lower_bounds = np.array([b[0] for b in bounds], dtype=float)
+        upper_bounds = np.array([b[1] for b in bounds], dtype=float)
+        initial_array = np.array(initial_guess, dtype=float)
+        optimized_values = _simple_random_search(
             objective,
-            initial_guess,
-            method='SLSQP',
-            bounds=bounds,
-            constraints=constraints,
-            options={'disp': True, 'maxiter': 1000, 'ftol': 1e-6}
+            budget_constraint,
+            initial_array,
+            lower_bounds,
+            upper_bounds,
         )
-        if result.success:
-            optimized_values = result.x
-            optimized_df = working_df.copy()
-            for i, var in enumerate(active_variables):
-                start_idx = i * forecast_years
-                end_idx = start_idx + forecast_years
-                optimized_df[var] = optimized_values[start_idx:end_idx]
-            self.calculate_supporting_schedules(optimized_df)
-            self.calculate_income_statement(optimized_df)
-            optimized_data = []
-            for idx, row in optimized_df.iterrows():
-                variables_dict = {var: row[var] for var in variables}
-                changes_dict = {
-                    f"{var} Change (%)": ((row[var] - working_df[var].iloc[idx]) / working_df[var].iloc[idx] * 100)
-                    if working_df[var].iloc[idx] != 0 else 0
-                    for var in variables
-                }
-                optimized_data.append({
-                    "year": row['Year'],
-                    "variables": variables_dict,
-                    "changes": changes_dict
-                })
-            return {
-                "optimized_data": optimized_data,
-                "original_ebitda": working_df['EBITDA'].sum(),
-                "optimized_ebitda": optimized_df['EBITDA'].sum(),
-                "ebitda_change_percent": (optimized_df['EBITDA'].sum() - working_df['EBITDA'].sum()) / working_df['EBITDA'].sum() * 100,
-                "message": f"Optimization successful for {budget_line} budget: ${budget_amount * forecast_years:,.0f}"
+
+        if budget_constraint(optimized_values) < 0:
+            raise HTTPException(status_code=500, detail="Optimization failed to satisfy the budget constraint")
+
+        optimized_df = working_df.copy()
+        for i, var in enumerate(active_variables):
+            start_idx = i * forecast_years
+            end_idx = start_idx + forecast_years
+            optimized_df[var] = optimized_values[start_idx:end_idx]
+        self.calculate_supporting_schedules(optimized_df)
+        self.calculate_income_statement(optimized_df)
+        optimized_data = []
+        for idx, row in optimized_df.iterrows():
+            variables_dict = {var: row[var] for var in variables}
+            changes_dict = {
+                f"{var} Change (%)": ((row[var] - working_df[var].iloc[idx]) / working_df[var].iloc[idx] * 100)
+                if working_df[var].iloc[idx] != 0 else 0
+                for var in variables
             }
-        else:
-            raise HTTPException(status_code=500, detail=f"Optimization failed: {result.message}")
+            optimized_data.append({
+                "year": row['Year'],
+                "variables": variables_dict,
+                "changes": changes_dict
+            })
+        return {
+            "optimized_data": optimized_data,
+            "original_ebitda": working_df['EBITDA'].sum(),
+            "optimized_ebitda": optimized_df['EBITDA'].sum(),
+            "ebitda_change_percent": (optimized_df['EBITDA'].sum() - working_df['EBITDA'].sum()) / working_df['EBITDA'].sum() * 100,
+            "message": f"Optimization successful for {budget_line} budget: ${budget_amount * forecast_years:,.0f}"
+        }
 
     def run_schedule_risk_analysis(self, df, num_simulations, confidence_level):
         """Simulate ScheduleRiskAnalysis: Project Timeline Risk Assessment"""
@@ -3095,41 +3216,60 @@ class EcommerceModel:
             volatility['wacc'] = 0.1
             volatility['perpetual_growth'] = 0.05
             
+            rng = np.random.default_rng()
+
             # Distribution sampling functions
             dist_map = {
-                "Normal": lambda mean, std: norm.rvs(loc=mean, scale=max(std, 1e-6)),
-                "Lognormal": lambda mean, std: lognorm.rvs(s=max(std, 1e-6), scale=max(np.exp(mean), 1e-6)),
-                "Uniform": lambda mean, std: uniform.rvs(loc=mean - max(std, 1e-6) * np.sqrt(3), 
-                                                    scale=2 * max(std, 1e-6) * np.sqrt(3)),
-                "Exponential": lambda mean, _: expon.rvs(scale=max(mean, 1e-6)),
-                "Binomial": lambda mean, std: binom.rvs(n=max(int(mean / max(std**2, 1e-6)), 1), 
-                                                    p=min(max(std**2 / mean, 0.01), 0.99)),
-                "Poisson": lambda mean, _: poisson.rvs(mu=max(mean, 1e-6)),
-                "Geometric": lambda mean, _: geom.rvs(p=min(max(1 / mean, 0.01), 0.99)),
-                "Bernoulli": lambda mean, _: bernoulli.rvs(p=min(max(mean, 0.01), 0.99)),
-                "Chi-square": lambda mean, _: chi2.rvs(df=max(mean, 1e-6)),
-                "Gamma": lambda mean, std: gamma.rvs(a=max(mean**2 / max(std**2, 1e-6), 1e-6), 
-                                                scale=max(std**2 / mean, 1e-6)),
-                "Weibull": lambda mean, std: weibull_min.rvs(c=max(mean / max(std, 1e-6), 1e-6), 
-                                                        scale=max(mean / gamma(1 + 1 / max(mean / max(std, 1e-6), 1e-6)), 1e-6)),
-                "Hypergeometric": lambda mean, std: hypergeom.rvs(M=max(int(mean * 10), 1), 
-                                                                n=max(int(mean), 1), 
-                                                                N=max(int(mean * 2), 1)),
-                "Multinomial": lambda mean, _: multinomial.rvs(n=max(int(mean), 1), p=[0.25, 0.25, 0.25, 0.25])[:, 0],
-                # "T-distribution": lambda mean, std: t.rvs(df=max(int(mean / max(std, 1e-6)), 1), 
-                #                                         loc=mean, scale=max(std, 1e-6)),
-                "Beta": lambda mean, std: beta.rvs(a=max(mean * (mean * (1 - mean) / max(std**2, 1e-6) - 1), 1e-6), 
-                                                b=max((1 - mean) * (mean * (1 - mean) / max(std**2, 1e-6) - 1), 1e-6)) * max(mean / std, 1e-6),
-                "F-distribution": lambda mean, _: f.rvs(dfn=max(int(mean), 1), dfd=max(int(mean), 1), 
-                                                    loc=mean),
-                "Discrete": lambda mean, std: np.random.choice([max(mean - std, 0), mean, mean + std], 
-                                                            p=[0.25, 0.5, 0.25]),
-                "Continuous": lambda mean, std: norm.rvs(loc=mean, scale=max(std, 1e-6)),
-                "Cumulative": lambda mean, std: np.cumsum(norm.rvs(loc=mean / total_years, 
-                                                                scale=max(std, 1e-6), 
-                                                                size=total_years))[-1]
+                "Normal": lambda mean, std: rng.normal(loc=mean, scale=max(std, 1e-6)),
+                "Lognormal": lambda mean, std: rng.lognormal(mean=np.log(max(mean, 1e-6)), sigma=max(std, 1e-6)),
+                "Uniform": lambda mean, std: rng.uniform(
+                    low=mean - max(std, 1e-6) * np.sqrt(3),
+                    high=mean + max(std, 1e-6) * np.sqrt(3),
+                ),
+                "Exponential": lambda mean, _: rng.exponential(scale=max(mean, 1e-6)),
+                "Binomial": lambda mean, std: rng.binomial(
+                    n=max(int(max(mean, 1.0) / max(std**2, 1e-6)), 1),
+                    p=min(max(std**2 / max(mean, 1e-6), 0.01), 0.99),
+                ),
+                "Poisson": lambda mean, _: rng.poisson(lam=max(mean, 1e-6)),
+                "Geometric": lambda mean, _: rng.geometric(p=min(max(1 / max(mean, 1.0), 0.01), 0.99)),
+                "Bernoulli": lambda mean, _: rng.binomial(n=1, p=min(max(mean, 0.01), 0.99)),
+                "Chi-square": lambda mean, _: rng.chisquare(df=max(int(mean) or 1, 1)),
+                "Gamma": lambda mean, std: rng.gamma(
+                    shape=max(mean**2 / max(std**2, 1e-6), 1e-6),
+                    scale=max(std**2 / max(mean, 1e-6), 1e-6),
+                ),
+                "Weibull": lambda mean, std: rng.weibull(max(mean / max(std, 1e-6), 1e-6)) * max(mean, 1e-6),
+                "Hypergeometric": lambda mean, std: (
+                    lambda ngood: rng.hypergeometric(
+                        ngood=ngood,
+                        nbad=max(ngood, 1),
+                        nsample=min(ngood, max(int(mean), 1)),
+                    )
+                )(max(int(mean), 1)),
+                "Multinomial": lambda mean, _: rng.multinomial(
+                    n=max(int(mean), 1), pvals=[0.25, 0.25, 0.25, 0.25]
+                )[0],
+                "Beta": lambda mean, std: rng.beta(
+                    a=max(mean * (mean * (1 - mean) / max(std**2, 1e-6) - 1), 1e-6),
+                    b=max((1 - mean) * (mean * (1 - mean) / max(std**2, 1e-6) - 1), 1e-6),
+                )
+                * max(mean / max(std, 1e-6), 1e-6),
+                "F-distribution": lambda mean, _: (
+                    lambda df: (
+                        (rng.chisquare(df=df) / max(df, 1))
+                        / max(rng.chisquare(df=df) / max(df, 1), 1e-6)
+                    )
+                )(max(int(mean), 1)),
+                "Discrete": lambda mean, std: rng.choice(
+                    [max(mean - std, 0), mean, mean + std], p=[0.25, 0.5, 0.25]
+                ),
+                "Continuous": lambda mean, std: rng.normal(loc=mean, scale=max(std, 1e-6)),
+                "Cumulative": lambda mean, std: np.cumsum(
+                    rng.normal(loc=mean / max(total_years, 1), scale=max(std, 1e-6), size=total_years)
+                )[-1],
             }
-            
+
             dist_func = dist_map.get(distribution_type, dist_map["Normal"])
             
             for sim in range(num_simulations):

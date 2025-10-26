@@ -1,9 +1,12 @@
 """Streamlit dashboard for manual ecommerce financial modeling."""
 from __future__ import annotations
+import importlib
+import io
 import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 import json
+import re
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -15,6 +18,8 @@ try:  # numpy removed np.irr in v2.0; prefer numpy-financial when available
     import numpy_financial as npf
 except Exception:  # pragma: no cover - fallback when package is unavailable
     npf = None
+
+from environment_check import diagnose_environment
 
 # ---------------------------------------------------------------------------
 # Streamlit configuration & constants
@@ -36,6 +41,35 @@ def inject_global_styles() -> None:
         <style>
         [data-testid="stSidebar"] {display: none !important;}
         [data-testid="collapsedControl"] {display: none !important;}
+
+        /* Row action styling */
+        .row-action-label {
+            padding: 0.35rem 0.75rem;
+            border-radius: 0.5rem;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            font-size: 0.9rem;
+            line-height: 1.25;
+            display: flex;
+            align-items: center;
+            min-height: 2.25rem;
+            margin-bottom: 0;
+        }
+
+        .row-action-wrapper [data-testid="stColumn"] {
+            display: flex;
+            align-items: center;
+        }
+
+        .row-action-wrapper [data-testid="stColumn"] + [data-testid="stColumn"] {
+            justify-content: flex-end;
+        }
+
+        .row-action-wrapper button[data-testid="baseButton-secondary"],
+        .row-action-wrapper button[data-testid="baseButton-primary"] {
+            min-width: 7rem;
+            padding: 0.35rem 0.75rem;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -78,6 +112,34 @@ DEFAULT_PRODUCTION_START_YEAR = 2023
 DEFAULT_PRODUCTION_END_YEAR = 2027
 PRODUCTION_YEAR_CHOICES = list(range(2000, 2101))
 CONSISTENCY_TOLERANCE = 1e-2
+
+
+def render_environment_banner() -> bool:
+    """Display dependency readiness and return ``True`` when safe to continue."""
+
+    status = diagnose_environment()
+    missing_required: List[str] = status.get("missing_required", [])  # type: ignore[arg-type]
+    missing_optional: List[str] = status.get("missing_optional", [])  # type: ignore[arg-type]
+    st.session_state["missing_optional_dependencies"] = missing_optional
+
+    if missing_required:
+        missing_list = ", ".join(missing_required)
+        st.error(
+            "The analytics engine is unavailable because the following Python packages "
+            f"are missing: {missing_list}. Install the backend dependencies with `pip install -r "
+            "backend-requirements.txt` and restart the app."
+        )
+        return False
+
+    if missing_optional:
+        st.warning(
+            "Optional features may be limited because these packages are unavailable: "
+            + ", ".join(missing_optional)
+        )
+    else:
+        st.success("All analytical dependencies are available.")
+
+    return True
 
 
 def default_production_years() -> List[int]:
@@ -2787,15 +2849,158 @@ def configure_sidebar() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _sanitize_sheet_name(name: str, existing: Set[str]) -> str:
+    cleaned = re.sub(r"[\\/:?*\[\]]", "_", name)
+    cleaned = cleaned.strip() or "Sheet"
+    if len(cleaned) > 31:
+        cleaned = cleaned[:31]
+    base = cleaned
+    counter = 1
+    while cleaned in existing:
+        suffix = f"_{counter}"
+        cleaned = f"{base[: 31 - len(suffix)]}{suffix}" if len(base) + len(suffix) > 31 else f"{base}{suffix}"
+        counter += 1
+    existing.add(cleaned)
+    return cleaned
+
+
+def _gather_excel_frames(results: Dict[str, Any], assumption_tables: Dict[str, pd.DataFrame]) -> List[Tuple[str, pd.DataFrame]]:
+    frames: List[Tuple[str, pd.DataFrame]] = []
+
+    def add_frame(sheet_name: str, data: Any) -> None:
+        df = data if isinstance(data, pd.DataFrame) else to_dataframe(data)
+        if df is not None and not df.empty:
+            frames.append((sheet_name, df))
+
+    add_frame("Summary", results.get("summary"))
+    add_frame("Income Statement", results.get("income_statement"))
+    add_frame("Cash Flow", results.get("cashflow"))
+    add_frame("Balance Sheet", results.get("position"))
+    add_frame("Performance", results.get("performance"))
+    add_frame("Operational KPIs", results.get("operational_kpis"))
+    add_frame("Customer Metrics", results.get("customer_metrics"))
+    add_frame("Scenario Summary", results.get("scenario_summary"))
+    add_frame("Top Sensitivity", results.get("top_sensitivity"))
+    valuation_df = results.get("valuation_table")
+    add_frame("Valuation", valuation_df)
+    chart_payloads = results.get("chart_payloads", {}) if isinstance(results, dict) else {}
+    add_frame("DCF Summary", chart_payloads.get("dcf_summary"))
+    add_frame("Debt Amortization", results.get("debt_amortization"))
+    add_frame("Asset Schedule", results.get("asset_schedule"))
+    add_frame("Asset Rollforward", results.get("asset_rollforward"))
+
+    for schedule_name, table in sorted(assumption_tables.items()):
+        add_frame(f"Assumption - {schedule_name}", table)
+
+    if not frames:
+        return []
+
+    existing: Set[str] = set()
+    prepared: List[Tuple[str, pd.DataFrame]] = []
+    for sheet_name, frame in frames:
+        sanitized = _sanitize_sheet_name(sheet_name, existing)
+        prepared.append((sanitized, frame))
+    return prepared
+
+
+_EXCEL_ENGINE: Optional[str] = None
+
+
+def _resolve_excel_engine() -> str:
+    global _EXCEL_ENGINE
+    if _EXCEL_ENGINE:
+        return _EXCEL_ENGINE
+
+    engine_candidates: List[Tuple[str, str]] = [
+        ("xlsxwriter", "xlsxwriter"),
+        ("openpyxl", "openpyxl"),
+    ]
+
+    for engine_name, module_name in engine_candidates:
+        try:
+            importlib.import_module(module_name)
+        except ImportError:
+            continue
+        _EXCEL_ENGINE = engine_name
+        return engine_name
+
+    raise RuntimeError(
+        "No supported Excel writer engine found. Install either 'xlsxwriter' or 'openpyxl'."
+    )
+
+
+def _generate_excel_bytes(results: Dict[str, Any], assumption_tables: Dict[str, pd.DataFrame]) -> bytes:
+    frames = _gather_excel_frames(results, assumption_tables)
+    if not frames:
+        return b""
+    buffer = io.BytesIO()
+    try:
+        engine_name = _resolve_excel_engine()
+    except RuntimeError as error:
+        st.error(str(error))
+        return b""
+
+    with pd.ExcelWriter(buffer, engine=engine_name) as writer:
+        for sheet_name, frame in frames:
+            frame.to_excel(writer, sheet_name=sheet_name, index=False)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def render_excel_download_section() -> None:
+    download_container = st.container()
+    results: Dict[str, Any] = st.session_state.get("model_results", {})
+    assumption_tables: Dict[str, pd.DataFrame] = st.session_state.get("assumption_tables", {})
+    selected_scenario = "Base Case"
+    scenario_key = re.sub(r"[^0-9a-z]+", "_", selected_scenario.lower()) or "default"
+
+    excel_map: Dict[str, bytes] = st.session_state.setdefault("excel_bytes_map", {})
+    excel_bytes = excel_map.get(selected_scenario)
+
+    with download_container:
+        st.subheader("Prepare Excel Model")
+        if not results:
+            st.info("Apply assumptions to generate results before preparing the Excel model.")
+
+        if excel_bytes is None:
+            if st.button(
+                "Prepare Excel Model",
+                key=f"prepare_excel_{scenario_key}",
+                disabled=not results,
+            ):
+                with st.spinner("Preparing Excel workbook..."):
+                    excel_bytes = _generate_excel_bytes(results, assumption_tables)
+                excel_map[selected_scenario] = excel_bytes
+                st.session_state.excel_bytes_map = excel_map
+
+        if excel_bytes is not None:
+            st.download_button(
+                "Download Excel Model",
+                data=excel_bytes,
+                file_name="Ecommerce_Financial_Model.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            if st.button(
+                "Clear Prepared Excel",
+                key=f"clear_excel_{scenario_key}",
+            ):
+                excel_map.pop(selected_scenario, None)
+                st.session_state.excel_bytes_map = excel_map
+                excel_bytes = None
+
+        if excel_bytes is None:
+            st.info("Click 'Prepare Excel Model' to generate the workbook for download.")
+
+
 def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
     with tab:
+        ensure_assumption_tables()
+        render_excel_download_section()
         st.header("Workbook setup & assumptions")
         st.write(
             "Upload or refresh the working Excel file, edit the grouped assumption tables,"
             " and control base analysis inputs before running downstream workflows."
         )
-
-        ensure_assumption_tables()
 
         st.subheader("Production horizon")
         st.caption(
@@ -3146,17 +3351,28 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                             if pd.notna(value):
                                 summary_bits.append(f"{col}: {value}")
                         summary_text = " | ".join(summary_bits) or f"Row {idx + 1}"
-                        row_label_col, row_button_col = st.columns([1, 0.6], gap="small")
-                        with row_label_col:
-                            st.write(summary_text)
-                        with row_button_col:
-                            if st.button(
-                                "Edit",
-                                key=f"{editor_key}_edit_button_{idx}",
-                                use_container_width=True,
-                            ):
-                                st.session_state[edit_state_key] = idx
-                                active_edit = idx
+                        with st.container():
+                            st.markdown(
+                                "<div class='row-action-wrapper'>",
+                                unsafe_allow_html=True,
+                            )
+                            row_label_col, row_button_col = st.columns(
+                                [0.7, 0.3], gap="small"
+                            )
+                            with row_label_col:
+                                st.markdown(
+                                    f"<div class='row-action-label'>{summary_text}</div>",
+                                    unsafe_allow_html=True,
+                                )
+                            with row_button_col:
+                                if st.button(
+                                    "Edit",
+                                    key=f"{editor_key}_edit_button_{idx}",
+                                    use_container_width=True,
+                                ):
+                                    st.session_state[edit_state_key] = idx
+                                    active_edit = idx
+                            st.markdown("</div>", unsafe_allow_html=True)
 
                 if active_edit is not None:
                     st.divider()
@@ -4121,6 +4337,12 @@ def render_advanced_tab(tab: st.delta_generator.DeltaGenerator) -> None:
 
 def main() -> None:
     configure_sidebar()
+    st.title("Ecommerce Financial Model")
+    st.caption(
+        "Interactive workbook builder for ecommerce financial planning and scenario analysis."
+    )
+    if not render_environment_banner():
+        return
     (
         input_tab,
         metrics_tab,

@@ -9,6 +9,10 @@ from typing import Dict, List, Any,Optional
 import pandas as pd
 import uuid
 from fastapi.encoders import jsonable_encoder
+from environment_check import require_environment
+
+require_environment()
+
 from ecommerce import EcommerceModel
 import logging
 import numpy as np
