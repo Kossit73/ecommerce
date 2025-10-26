@@ -4274,6 +4274,10 @@ def render_advanced_tab(tab: st.delta_generator.DeltaGenerator) -> None:
 
 def main() -> None:
     configure_sidebar()
+    st.title("Ecommerce Financial Model")
+    st.caption(
+        "Interactive workbook builder for ecommerce financial planning and scenario analysis."
+    )
     (
         input_tab,
         metrics_tab,
