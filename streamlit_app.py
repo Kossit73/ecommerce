@@ -38,6 +38,35 @@ def inject_global_styles() -> None:
         <style>
         [data-testid="stSidebar"] {display: none !important;}
         [data-testid="collapsedControl"] {display: none !important;}
+
+        /* Row action styling */
+        .row-action-label {
+            padding: 0.35rem 0.75rem;
+            border-radius: 0.5rem;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            font-size: 0.9rem;
+            line-height: 1.25;
+            display: flex;
+            align-items: center;
+            min-height: 2.25rem;
+            margin-bottom: 0;
+        }
+
+        .row-action-wrapper [data-testid="stColumn"] {
+            display: flex;
+            align-items: center;
+        }
+
+        .row-action-wrapper [data-testid="stColumn"] + [data-testid="stColumn"] {
+            justify-content: flex-end;
+        }
+
+        .row-action-wrapper button[data-testid="baseButton-secondary"],
+        .row-action-wrapper button[data-testid="baseButton-primary"] {
+            min-width: 7rem;
+            padding: 0.35rem 0.75rem;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -3259,17 +3288,28 @@ def render_input_tab(tab: st.delta_generator.DeltaGenerator) -> None:
                             if pd.notna(value):
                                 summary_bits.append(f"{col}: {value}")
                         summary_text = " | ".join(summary_bits) or f"Row {idx + 1}"
-                        row_label_col, row_button_col = st.columns([1, 0.6], gap="small")
-                        with row_label_col:
-                            st.write(summary_text)
-                        with row_button_col:
-                            if st.button(
-                                "Edit",
-                                key=f"{editor_key}_edit_button_{idx}",
-                                use_container_width=True,
-                            ):
-                                st.session_state[edit_state_key] = idx
-                                active_edit = idx
+                        with st.container():
+                            st.markdown(
+                                "<div class='row-action-wrapper'>",
+                                unsafe_allow_html=True,
+                            )
+                            row_label_col, row_button_col = st.columns(
+                                [0.7, 0.3], gap="small"
+                            )
+                            with row_label_col:
+                                st.markdown(
+                                    f"<div class='row-action-label'>{summary_text}</div>",
+                                    unsafe_allow_html=True,
+                                )
+                            with row_button_col:
+                                if st.button(
+                                    "Edit",
+                                    key=f"{editor_key}_edit_button_{idx}",
+                                    use_container_width=True,
+                                ):
+                                    st.session_state[edit_state_key] = idx
+                                    active_edit = idx
+                            st.markdown("</div>", unsafe_allow_html=True)
 
                 if active_edit is not None:
                     st.divider()
