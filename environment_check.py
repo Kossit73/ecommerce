@@ -39,13 +39,13 @@ def diagnose_environment() -> Dict[str, object]:
     module_status: Dict[str, bool] = {}
 
     for module_name, friendly in REQUIRED_MODULES.items():
-        available = importlib.util.find_spec(module_name) is not None
+        available = _module_available(module_name)
         module_status[module_name] = available
         if not available:
             missing_required.append(friendly)
 
     for module_name, friendly in OPTIONAL_MODULES.items():
-        available = importlib.util.find_spec(module_name) is not None
+        available = _module_available(module_name)
         module_status[module_name] = available
         if not available:
             missing_optional.append(friendly)
@@ -81,3 +81,23 @@ def require_environment(*, strict: bool = True) -> None:
     if strict:
         raise RuntimeError(message)
     LOGGER.warning(message)
+
+
+def _module_available(module_name: str) -> bool:
+    """Return ``True`` if ``module_name`` can be imported without errors."""
+
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except ModuleNotFoundError:
+        # Nested module lookups (e.g. ``scipy.optimize``) raise ``ModuleNotFoundError``
+        # when the parent distribution is missing. Treat this the same as ``find_spec``
+        # returning ``None`` so the caller can surface a friendly warning instead of
+        # crashing the Streamlit script.
+        return False
+    except ValueError:
+        # ``find_spec`` can raise ``ValueError`` for namespace packages that do not
+        # expose any loaders. This again simply indicates the module is unavailable.
+        return False
+    except Exception:  # pragma: no cover - extremely defensive guardrail
+        LOGGER.debug("Unexpected error while probing module %s", module_name, exc_info=True)
+        return False
